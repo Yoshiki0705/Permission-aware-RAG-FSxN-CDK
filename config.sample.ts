@@ -162,7 +162,7 @@ export const devConfig: Config = {
     natSubnet: true,
     isolatedSubnet: true,
     maxAzs: 2,
-    appDomainName: "fsxn.hiroshima-u.ac.jp",
+    appDomainName: "fsxn.example.com",
     existingRoute53: false,
   },
   adConfig: {
