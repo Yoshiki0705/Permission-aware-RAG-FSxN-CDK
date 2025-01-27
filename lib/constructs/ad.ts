@@ -1,3 +1,9 @@
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
+
 import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
 import {
@@ -7,6 +13,7 @@ import {
   InstanceSize,
   InstanceType,
   ISubnet,
+  IVpc,
   KeyPair,
   MachineImage,
   Peer,
@@ -24,11 +31,11 @@ import {
 import { CfnAssociation } from "aws-cdk-lib/aws-ssm";
 import { CfnMicrosoftAD } from "aws-cdk-lib/aws-directoryservice";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
-import { AdConfig } from "../../config";
 import { NagSuppressions } from "cdk-nag";
+import { AdConfig } from "../../types/type";
 
 interface AdProps extends AdConfig {
-  vpc: Vpc;
+  vpc: Vpc | IVpc;
   adUsername: string;
 }
 export class Ad extends Construct {
@@ -189,7 +196,7 @@ export class Ad extends Construct {
     );
 
     new cdk.CfnOutput(this, "GetSecretValueCommand", {
-      value: `aws secretsmanager get-secret-value --secret-id ${this.adPasswoed.secretName} --profile YOUR_AWS_PROFILE`,
+      value: `aws secretsmanager get-secret-value --secret-id ${this.adPasswoed.secretName} --query SecretString --output text --profile YOUR_AWS_PROFILE | jq -r '.password' `,
     });
   }
 }

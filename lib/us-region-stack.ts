@@ -1,3 +1,8 @@
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { Waf } from "./constructs/waf";
@@ -17,14 +22,14 @@ export class UsRegionStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
     // WAF
-    const wafv2 = new Waf(this, "CloudFrontFireWall", {
+    const wafv2 = new Waf(this, `${id}-CloudFrontFireWall`, {
       allowedIps: devConfig.allowedIps,
       useCloudFront: true,
     });
     this.wafAttrArn = wafv2.webAcl.attrArn;
 
     // Lambda@Edge for CloufFront
-    const edgeFnRole = new Role(this, "LambdaEdgeFunctionRole", {
+    const edgeFnRole = new Role(this, `${id}-LambdaEdgeFunctionRole`, {
       assumedBy: new CompositePrincipal(
         new ServicePrincipal("lambda.amazonaws.com"),
         new ServicePrincipal("edgelambda.amazonaws.com")
@@ -36,15 +41,19 @@ export class UsRegionStack extends cdk.Stack {
         ManagedPolicy.fromAwsManagedPolicyName("AWSLambda_FullAccess"),
       ],
     });
-    const lambdaEdgeFunction = new NodejsFunction(this, "LambdaEdgeFunction", {
-      runtime: Runtime.NODEJS_20_X,
-      entry: "./lambda/index.ts",
-      handler: "handler",
-      awsSdkConnectionReuse: false,
-      memorySize: 1024,
-      timeout: cdk.Duration.seconds(5),
-      role: edgeFnRole,
-    });
+    const lambdaEdgeFunction = new NodejsFunction(
+      this,
+      `${id}-LambdaEdgeFunction`,
+      {
+        runtime: Runtime.NODEJS_22_X,
+        entry: "./lambda/edge/index.ts",
+        handler: "handler",
+        awsSdkConnectionReuse: false,
+        memorySize: 1024,
+        timeout: cdk.Duration.seconds(5),
+        role: edgeFnRole,
+      }
+    );
     this.edgeFnVersion = lambdaEdgeFunction.currentVersion;
 
     NagSuppressions.addResourceSuppressions(

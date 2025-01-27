@@ -1,3 +1,9 @@
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
+
 import * as cdk from "aws-cdk-lib";
 import {
   AuthorizationType,
@@ -13,11 +19,11 @@ import {
 } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import { ECR } from "./repository";
-import { ChatAppConfig } from "../../config";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { TableV2 } from "aws-cdk-lib/aws-dynamodb";
 import { NagSuppressions } from "cdk-nag";
 import { LogGroup } from "aws-cdk-lib/aws-logs";
+import { ChatAppConfig } from "../../types/type";
 
 interface ApiProps extends ChatAppConfig {
   db: TableV2;
@@ -38,7 +44,7 @@ export class Api extends Construct {
       code: DockerImageCode.fromEcr(lambdaRepository.repository, {
         tagOrDigest: props.tag,
       }),
-      architecture: Architecture.X86_64,
+      architecture: Architecture.ARM_64,
       memorySize: 2048,
       timeout: cdk.Duration.minutes(5),
       environment: {

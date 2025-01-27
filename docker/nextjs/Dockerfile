@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/node:20.9.0-slim as builder
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/node:20.9.0-slim as builder
 WORKDIR /app
 
 COPY . .

@@ -1,3 +1,9 @@
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
+
 import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
 import {
@@ -6,6 +12,7 @@ import {
   InstanceSize,
   InstanceType,
   ISubnet,
+  IVpc,
   KeyPair,
   LaunchTemplate,
   LaunchTemplateHttpTokens,
@@ -15,7 +22,6 @@ import {
   SecurityGroup,
   UserData,
   Vpc,
-  IVpc,
 } from "aws-cdk-lib/aws-ec2";
 import {
   Effect,
@@ -30,20 +36,23 @@ import { FSxN } from "./fsx";
 import { CfnVolume } from "aws-cdk-lib/aws-fsx";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { NagSuppressions } from "cdk-nag";
+import { DatabaseCluster } from "aws-cdk-lib/aws-rds";
 
 interface EmbeddingServerProps extends cdk.StackProps {
   vpc: Vpc | IVpc;
-  vector: CfnCollection;
-/*  adSecret: Secret; */
+  vector: CfnCollection | DatabaseCluster;
+  adSecret: Secret;
   role: Role;
   imagePath: string;
   tag: string;
-/*  fsx: FSxN;*/
+  fsx: FSxN;
 }
 export class EmbeddingServer extends Construct {
   public readonly microsoftAd: CfnMicrosoftAD;
+  public readonly instance: Instance;
   constructor(scope: Construct, id: string, props: EmbeddingServerProps) {
     super(scope, id);
+
     const embeddingRepository = new ECR(this, "Ecr", {
       path: `${props.imagePath}/embed`,
       tag: props.tag,
@@ -57,6 +66,14 @@ export class EmbeddingServer extends Construct {
     });
 
     const instanceRole = props.role;
+    if (props.vector instanceof cdk.aws_rds.DatabaseCluster) {
+      props.vector.connections.allowFrom(
+        sg,
+        Port.tcp(props.vector.clusterEndpoint.port)
+      );
+      props.vector.grantDataApiAccess(instanceRole);
+      props.vector.secret!.grantRead(instanceRole);
+    }
 
     // For fleet  Manager
 
@@ -118,18 +135,21 @@ export class EmbeddingServer extends Construct {
     instanceRole.addManagedPolicy(
       ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMDirectoryServiceAccess")
     );
-    instanceRole.addToPolicy(
-      new PolicyStatement({
-        effect: Effect.ALLOW,
-        actions: [
-          "aoss:APIAccessAll",
-          "aoss:CreateAccessPolicy",
-          "aoss:CreateSecurityPolicy",
-          "aoss:CreateCollection",
-        ],
-        resources: [props.vector.attrArn],
-      })
-    );
+    if (props.vector instanceof CfnCollection) {
+      instanceRole.addToPolicy(
+        new PolicyStatement({
+          effect: Effect.ALLOW,
+          actions: [
+            "aoss:APIAccessAll",
+            "aoss:CreateAccessPolicy",
+            "aoss:CreateSecurityPolicy",
+            "aoss:CreateCollection",
+          ],
+          resources: [props.vector.attrArn],
+        })
+      );
+    }
+
     instanceRole.addToPolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
@@ -164,20 +184,20 @@ export class EmbeddingServer extends Construct {
       })
     );
 
-/*    instanceRole.addToPolicy(
+    instanceRole.addToPolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
         actions: ["secretsmanager:GetSecretValue"],
         resources: [props.adSecret.secretArn],
       })
     );
-*/
+
     const key = new KeyPair(this, "Key");
     key.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
 
-/*    const ontapConfigProperty = props.fsx.ragdbVolume
+    const ontapConfigProperty = props.fsx.ragdbVolume
       .ontapConfiguration as CfnVolume.OntapConfigurationProperty;
-*/
+
     const userData = UserData.forLinux({ shebang: "#!/bin/sh" });
     userData.addCommands(
       "set -ex",
@@ -190,7 +210,7 @@ export class EmbeddingServer extends Construct {
       "sudo mkdir /tmp/db",
       "pip3 install boto3",
 
-/*      `echo 'import boto3
+      `echo 'import boto3
 import json
 
 def get_secret():
@@ -218,14 +238,12 @@ print(get_secret())' > /tmp/get_password.py`,
       // パスワードを取得して環境変数に設定
       "AD_PASSWORD=$(python3 /tmp/get_password.py)",
 
-      'AD_PASSWORD="b?ei)Wd&XPsZGk9NW5XF;@?RNXUc-LuC1"',
       'echo "Password retrieved successfully"',
       `echo 'import boto3
 fsx = boto3.client("fsx",region_name="${cdk.Stack.of(this).region}")
-//response = fsx.describe_storage_virtual_machines(StorageVirtualMachineIds=["${
-//        props.fsx.svm.ref
-//      }"]) 
-response = fsx.describe_storage_virtual_machines(StorageVirtualMachineIds=["svm-0712d1d3bd3f5402e"])
+response = fsx.describe_storage_virtual_machines(StorageVirtualMachineIds=["${
+        props.fsx.svm.ref
+      }"])
 print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0])' > /tmp/get_svm_endpoint.py`,
 
       "chmod +x /tmp/get_svm_endpoint.py",
@@ -237,33 +255,47 @@ print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0
       "  exit 1",
       "fi",
       "SMB_IP=$(python3 /tmp/get_svm_endpoint.py)",
-*/
-      "SMB_IP=192.168.128.145",
-/*      `sudo mount -t cifs //$SMB_IP/c$/${props.fsx.bedrockRagVolume.name} /tmp/data -o user=Admin,password="$AD_PASSWORD",domain=bedrock-01.com,iocharset=utf8,mapchars,mfsymlinks`,*/
-      `sudo mount -t cifs //192.168.128.145/Cache /tmp/data -o 'user=Administrator,password=b?ei)Wd&XPsZGk9NW5XF;@?RNXUc-LuC1,domain=netappdemo.jp,iocharset=utf8,mapchars,mfsymlinks'`,
-/*      `sudo mount -t nfs ${props.fsx.svm.attrStorageVirtualMachineId}.${
+
+      `sudo mount -t cifs //$SMB_IP/c$/${props.fsx.bedrockRagVolume.name} /tmp/data -o user=Admin,password="$AD_PASSWORD",domain=bedrock-01.com,iocharset=utf8,mapchars,mfsymlinks`,
+      `sudo mount -t nfs ${props.fsx.svm.attrStorageVirtualMachineId}.${
         props.fsx.svm.fileSystemId
       }.fsx.${cdk.Stack.of(this).region}.amazonaws.com:${
         ontapConfigProperty.junctionPath
-      } /tmp/db`,*/
-/*      `sudo mount -t nfs svm-0712d1d3bd3f5402e.fs-0623d97a7e45fbe64.fsx.ap-northeast-1.amazonaws.com:/CIFScachevol1_cache /tmp/db`, */
+      } /tmp/db`,
       `sudo aws ecr get-login-password --region ${
         cdk.Stack.of(this).region
       } | sudo docker login --username AWS --password-stdin ${
         cdk.Stack.of(this).account
-      }.dkr.ecr.${cdk.Stack.of(this).region}.amazonaws.com`,
-      `sudo docker run -d -v /tmp/data:/opt/netapp/ai/data -v /tmp/db:/opt/netapp/ai/db -e ENV_REGION="${
-        cdk.Stack.of(this).region
-      }" -e ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME="${props.vector.name}" ${
-        embeddingRepository.repository.repositoryUri
-      }:latest`,
-      "docker logs $(docker ps -aq | head -n1)"
+      }.dkr.ecr.${cdk.Stack.of(this).region}.amazonaws.com`
     );
+
+    if (props.vector instanceof CfnCollection) {
+      userData.addCommands(
+        `sudo docker run -d -v /tmp/data:/opt/netapp/ai/data -v /tmp/db:/opt/netapp/ai/db -e ENV_REGION="${
+          cdk.Stack.of(this).region
+        }" -e ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME="${props.vector
+          .name!}" ${embeddingRepository.repository.repositoryUri}:latest`,
+        "docker logs $(docker ps -aq | head -n1)"
+      );
+    } else {
+      userData.addCommands(
+        `sudo docker run -d -v /tmp/data:/opt/netapp/ai/data -v /tmp/db:/opt/netapp/ai/db -e ENV_REGION="${
+          cdk.Stack.of(this).region
+        }" -e ENV_RDS_SECRETS_NAME="${
+          props.vector.secret!.secretName
+        }" -e ENV_SECRETS_ARN="${
+          props.vector.secret!.secretArn
+        }"  -e ENV_RDS_ARN="${props.vector.clusterArn}" ${
+          embeddingRepository.repository.repositoryUri
+        }:latest`,
+        "docker logs $(docker ps -aq | head -n1)"
+      );
+    }
 
     const embeddingServer = new Instance(this, "Instance", {
       vpc: props.vpc,
       vpcSubnets: {
-        subnets: props.vpc.isolatedSubnets,
+        subnets: props.vpc.privateSubnets,
       },
       securityGroup: sg,
       instanceType: InstanceType.of(InstanceClass.M5, InstanceSize.LARGE),
@@ -284,6 +316,8 @@ print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0
       version: launchTemplate.versionNumber,
       launchTemplateId: launchTemplate.launchTemplateId,
     };
+
+    this.instance = embeddingServer;
 
     NagSuppressions.addResourceSuppressions(
       instanceRole,

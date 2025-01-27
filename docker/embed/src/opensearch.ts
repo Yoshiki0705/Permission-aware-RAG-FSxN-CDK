@@ -40,7 +40,6 @@ export async function indexDocument(
   if (statusCode !== 201) {
     throw new Error(`Failed to index document, got status ${statusCode}`);
   }
-
   return body;
 }
 
@@ -121,8 +120,8 @@ export async function createIndex(client: Client, indexName: string) {
           },
           {
             "metadata.acl": {
-              match_mapping_type: "object",
-              mapping: { type: "object" },
+              match_mapping_type: "string",
+              mapping: { type: "keyword" },
             },
           },
         ],

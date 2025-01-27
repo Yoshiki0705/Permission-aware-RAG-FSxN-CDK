@@ -1,8 +1,13 @@
-import { Vpc,IVpc } from "aws-cdk-lib/aws-ec2";
-import { Cluster, ContainerImage,OperatingSystemFamily,CpuArchitecture } from "aws-cdk-lib/aws-ecs";
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
+
+import { Vpc } from "aws-cdk-lib/aws-ec2";
+import { Cluster, ContainerImage } from "aws-cdk-lib/aws-ecs";
 import { ApplicationLoadBalancedFargateService } from "aws-cdk-lib/aws-ecs-patterns";
 import { Construct } from "constructs";
-import { ChatAppConfig } from "../../config";
 import { ECR } from "./repository";
 import { LambdaRestApi } from "aws-cdk-lib/aws-apigateway";
 import * as cdk from "aws-cdk-lib";
@@ -20,9 +25,10 @@ import {
   ApplicationProtocol,
   SslPolicy,
 } from "aws-cdk-lib/aws-elasticloadbalancingv2";
+import { ChatAppConfig } from "../../types/type";
 
 interface ChatAppProps extends ChatAppConfig {
-  vpc: Vpc | IVpc;
+  vpc: Vpc;
   allowedIps: string[];
   api: LambdaRestApi;
   hostZone: PublicHostedZone | IHostedZone;
@@ -104,10 +110,6 @@ export class ChatApp extends Construct {
           },
         },
         ...props.albFargateServiceProps,
-	runtimePlatform: {
-        operatingSystemFamily: OperatingSystemFamily.LINUX,
-        cpuArchitecture: CpuArchitecture.X86_64
-      },
       }
     );
     app.loadBalancer.logAccessLogs(accessLoggingBucket);

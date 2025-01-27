@@ -32,12 +32,16 @@
             "indexes": {
                 "documents_opensearch_id_unique": {
                     "name": "documents_opensearch_id_unique",
-                    "columns": ["opensearch_id"],
+                    "columns": [
+                        "opensearch_id"
+                    ],
                     "isUnique": true
                 },
                 "opensearch_id_idx": {
                     "name": "opensearch_id_idx",
-                    "columns": ["opensearch_id"],
+                    "columns": [
+                        "opensearch_id"
+                    ],
                     "isUnique": false
                 }
             },
@@ -46,8 +50,12 @@
                     "name": "documents_file_id_files_id_fk",
                     "tableFrom": "documents",
                     "tableTo": "files",
-                    "columnsFrom": ["file_id"],
-                    "columnsTo": ["id"],
+                    "columnsFrom": [
+                        "file_id"
+                    ],
+                    "columnsTo": [
+                        "id"
+                    ],
                     "onDelete": "cascade",
                     "onUpdate": "no action"
                 }
@@ -97,17 +105,23 @@
             "indexes": {
                 "files_ino_unique": {
                     "name": "files_ino_unique",
-                    "columns": ["ino"],
+                    "columns": [
+                        "ino"
+                    ],
                     "isUnique": true
                 },
                 "ino_idx": {
                     "name": "ino_idx",
-                    "columns": ["ino"],
+                    "columns": [
+                        "ino"
+                    ],
                     "isUnique": false
                 },
                 "scan_id_idx": {
                     "name": "scan_id_idx",
-                    "columns": ["scan_id"],
+                    "columns": [
+                        "scan_id"
+                    ],
                     "isUnique": false
                 }
             },

@@ -24,7 +24,6 @@ ADD package.json ./
 ADD package-lock.json ./
 ADD src/ ./
 ADD tsconfig.json ./
-RUN npm install -g typescript
 RUN npm i --force
 RUN npm run build
 

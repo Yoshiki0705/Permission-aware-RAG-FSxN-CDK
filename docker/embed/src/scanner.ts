@@ -68,18 +68,12 @@ async function getACL(path: string) {
       ["R", "FULL", "READ", "CHANGE"].includes(acl.masks)
     );
 
-    return {
-      allowed: [
-        ...new Set(
-          acl.filter(({ type }) => type === "ALLOWED").map(({ sid }) => sid)
-        ),
-      ],
-      denied: [
-        ...new Set(
-          acl.filter(({ type }) => type === "DENIED").map(({ sid }) => sid)
-        ),
-      ],
-    };
+    const allowedList = [
+      ...new Set(
+        acl.filter(({ type }) => type === "ALLOWED").map(({ sid }) => sid)
+      ),
+    ];
+    return allowedList;
   } catch (err) {
     console.warn("Failed to get CIFS ACL for path", path);
   }

@@ -8,9 +8,6 @@ import { files, documents, filesRelations, documentsRelations } from "./schema";
 // Connect to the internal DB and run initial migration
 //
 const sqlite = new Database(process.env.INTERNAL_DB);
-console.log(sqlite)
-console.log(files)
-console.log(documents)
 const db = drizzle(sqlite, {
   schema: { files, documents, filesRelations, documentsRelations },
 });

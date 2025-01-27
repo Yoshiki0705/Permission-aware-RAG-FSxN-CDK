@@ -1,7 +1,7 @@
 # RAG Chatbot with FSx for ONTAP
 
-本プロトタイプは[Amazon FSx for NetApp ONTAP](https://aws.amazon.com/fsx/netapp-ontap/?nc1=h_ls)と[Amazon Bedrock](https://aws.amazon.com/bedrock/?nc1=h_ls)を利用した RAG Chatbot アプリケーションです。Chatbot アプリケーションは、1) [Nextjs](https://nextjs.org/) で実装した RAG Chatbot on AWS Lambda と、2) [Streamlit](https://streamlit.io/) で実装した RAG Chatbot on [Amazon ECS](https://aws.amazon.com/ecs/?nc1=h_ls)の 2 つが実装されています。それぞれのアプリケーションは [AWS WAF](https://aws.amazon.com/waf/?nc1=h_ls) で保護されており、API は IAM 認証を利用しています。RAG 検索で利用するベクトルデータは[Amazon OpenSearch Serverless](https://aws.amazon.com/opensearch-service/features/serverless/?nc1=h_ls)(以下、AOSS)
-に保存されており、Amazon FSx for NetApp ONTAP をマウントしている Embedding Server がベクトルデータを AOSS に定期的に更新しています。データのベクトル化には[Amazon Titan Text Embeddings models](https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html)を利用しています。
+本プロトタイプは[Amazon FSx for NetApp ONTAP](https://aws.amazon.com/fsx/netapp-ontap/?nc1=h_ls)と[Amazon Bedrock](https://aws.amazon.com/bedrock/?nc1=h_ls)を利用した RAG Chatbot アプリケーションです。Chatbot アプリケーションは、1) [Nextjs](https://nextjs.org/) で実装した RAG Chatbot on AWS Lambda と、2) [Streamlit](https://streamlit.io/) で実装した RAG Chatbot on [Amazon ECS](https://aws.amazon.com/ecs/?nc1=h_ls)の 2 つが実装されています。それぞれのアプリケーションは [AWS WAF](https://aws.amazon.com/waf/?nc1=h_ls) で保護されており、API は IAM 認証を利用しています。RAG 検索で利用するベクトルデータベースは、[Amazon Aurora Serverless v2](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/aurora-serverless-v2.html)、または[Amazon OpenSearch Serverless](https://aws.amazon.com/opensearch-service/features/serverless/?nc1=h_ls)(以下、AOSS)から選択できるようにしています。
+Amazon FSx for NetApp ONTAP をマウントしている Embedding Server が選択したベクトルデータベースに対して、定期的にベクトルデータの追加/更新/削除を行います。データのベクトル化には[Amazon Titan Text Embeddings models](https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html)を利用しています。
 
 1. RAG Chatbot on AWS Lambda
    - [AWS Lambda Web Adapter](https://github.com/awslabs/aws-lambda-web-adapter) を利用して Nextjs を稼働
@@ -17,8 +17,9 @@
 #### 1. セキュリティ
 
 1. **AWS WAF**: アプリケーションへのアクセスを制御するファイアウォール。Web アプリケーションにアクセスできる CIDR を設定し、不正アクセスをブロックできます。[Amazon CloudFront](https://aws.amazon.com/cloudfront/?nc2=type_a) と [Application Load Balancing](https://aws.amazon.com/jp/elasticloadbalancing/) に設定しています。
-2. **[AWS IAM](https://aws.amazon.com/iam/?nc2=type_a)**: [AWS Lambda](https://aws.amazon.com/lambda/?nc2=type_a) の Endpoint URL と[Amazon API Gateway](https://aws.amazon.com/api-gateway/)の Endpoint へのアクセス認証を行います。
-3. **アクセスログ**: Chatbot アプリのアクセスログを有効化しており、[Amazon S3](https://aws.amazon.com/pm/serv-s3/?nc1=h_ls) や [Amazon CloudWatch Logs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) に格納しています。
+2. **[Amazon Cognito](https://aws.amazon.com/cognito/?nc1=h_ls)**: RAG Chatbot on AWS Lambda に関して、Amazon Cognito を利用してユーザー認証を行い、認証したユーザーのみ RAG 検索可能です。
+3. **[AWS IAM](https://aws.amazon.com/iam/?nc2=type_a)**: [AWS Lambda](https://aws.amazon.com/lambda/?nc2=type_a) の Endpoint URL と[Amazon API Gateway](https://aws.amazon.com/api-gateway/)の Endpoint へのアクセス認証を行います。
+4. **アクセスログ**: Chatbot アプリのアクセスログを有効化しており、[Amazon S3](https://aws.amazon.com/pm/serv-s3/?nc1=h_ls) や [Amazon CloudWatch Logs](https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/WhatIsCloudWatchLogs.html) に格納しています。
 
 ## License
 
@@ -26,20 +27,24 @@
 
 ## RAG チャットアプリケーション設定
 
-- `config.ts`ファイルの作成
-  以下のコマンドで config.ts ファイルを作成してください。
+- `config.ts`ファイルの作成 : 以下のコマンドで config.ts ファイルを作成してください。
 
 ```zsh
 cp config.sample.ts config.ts
 ```
 
-各プロパティの定義は[config.sample.ts](config.sample.ts)に記載していますが、以下の設定は必ずご自身の環境の値に変更してください。(他のプロパティに関しては、デフォルト設定でも問題ありません)
+各プロパティの定義は[type.ts](types/type.ts)に記載していますが、以下の設定は必ずご自身の環境の値に変更してください。(他のプロパティに関しては、デフォルト設定でも問題ありません)
 
-| プロパティ      | 説明                                                                                                                                                                                |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| allowedIps      | AWS WAF 設定により Web アプリケーションに アクセス可能な CIDR を指定します。                                                                                                        |
-| appDomainName   | Chatbot on ECS で利用するドメイン名を指定します。 このドメイン名は必ず、**Amazon Route53 で登録したドメイン**、もしくは**外部プロバイダーにて登録したドメイン**を指定してください。 |
-| existingRoute53 | Amazon Route53 で登録したドメインを利用する際は`true`、外部プロバイダーにて登録したドメインを利用する際は`false`を指定してください。                                                |
+| プロパティ      | 説明                                                                                                                                                                                                                                                                                                                                                                 |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| userId          | Amazon Cognito UserPool に登録するユーザー名。 後述する`userAccessTable`を利用する場合は、一意(Unique)にする必要があります。                                                                                                                                                                                                                                         |
+| allowedIps      | AWS WAF 設定により Web アプリケーションに アクセス可能な CIDR を指定します。                                                                                                                                                                                                                                                                                         |
+| existingVpc     | 既存の VPC を利用する際は`true`、新規に VPC を作成する際は`false`を指定してください。ただし、既存の VPC を利用する場合は、`Private Subnet`(`SubnetType.PRIVATE_WITH_EGRESS`)、`Isolated Subnet`(`SubnetType.PRIVATE_ISOLATED`) と `VPC Endpoint`(`InterfaceVpcEndpointAwsService.RDS_DATA`と`InterfaceVpcEndpointAwsService.SECRETS_MANAGER`) があることが必須です。 |
+| vpcId           | `existingVpc`が`true`の場合は、利用する VPC の VPC ID をここで必ず定義してください。                                                                                                                                                                                                                                                                                 |
+| appDomainName   | Chatbot on ECS で利用するドメイン名を指定します。 このドメイン名は必ず、**Amazon Route53 で登録したドメイン**、もしくは**外部プロバイダーにて登録したドメイン**を指定してください。                                                                                                                                                                                  |
+| existingRoute53 | Amazon Route53 で登録したドメインを利用する際は`true`、外部プロバイダーにて登録したドメインを利用する際は`false`を指定してください。                                                                                                                                                                                                                                 |
+| vector          | ベクトルデータベースに利用する AWS サービスを指定します。Amazon Aurora Serverless v2 を利用する場合は`aurora`、Amazon OpenSearch Serverless を利用する場合は`aoss`を指定してください。                                                                                                                                                                               |
+| userAccessTable | ログインユーザーの権限テーブルを利用する場合は、DynamoDB のテーブル名をここで定義してください。テーブルに関しての詳細は[権限テーブル](#権限テーブル)を確認してください。                                                                                                                                                                                             |
 
 ## Deployment
 
@@ -52,10 +57,16 @@ cp config.sample.ts config.ts
 - Docker Desktop
 
   - AWS Lambda のコードなどのファイルのビルドに利用します。[こちら](https://www.docker.com/products/docker-desktop/)のページからダウンロード可能です。
+  - Multi-platform images ビルドの設定が必要です。今回コンテナ実行環境を ARM64 に指定しているため、デプロイ環境に応じて`docker buildx build --platform linux/arm64 .`などの実行が必要です。
+    - <https://docs.docker.com/build/building/multi-platform/#build-multi-platform-images>
 
 - AWS CLI
 
   - [こちらの手順](https://docs.aws.amazon.com/ja_jp/cli/latest/userguide/getting-started-install.html)で AWS CLI をインストールしてください。
+
+- jq
+
+  - <https://jqlang.github.io/jq/>
 
 - 設定ファイルと認証情報ファイルの設定
 
@@ -66,7 +77,7 @@ cp config.sample.ts config.ts
   ```
 
 - ドメインの取得
-  Chatbot on ECS にはドメインが必要です、**Amazon Route53 で新しいドメインを登録する**、もしくは**外部プロバイダーにてドメインを登録**してください。Route53 でのドメイン取得の手順は[こちら](https://docs.aws.amazon.com/ja_jp/Route53/latest/DeveloperGuide/domain-register-update.html)です。
+  Chatbot on ECS を利用するにはドメインが必要です、**Amazon Route53 で新しいドメインを登録する**、もしくは**外部プロバイダーにてドメインを登録**してください。Route53 でのドメイン取得の手順は[こちら](https://docs.aws.amazon.com/ja_jp/Route53/latest/DeveloperGuide/domain-register-update.html)です。
 
 ### 1. 依存関係のインストール
 
@@ -106,7 +117,7 @@ npm run cdk deploy -- --all --profile YOUR_AWS_PROFILE
 ✨  Deployment time: 147.17s
 
 Outputs:
-PrototypeFSxNRagStack.AdGetSecretValueCommand6F5CE13F = aws secretsmanager get-secret-value --secret-id AdSecretsForMicrosoftAdXXXX --profile YOUR_AWS_PROFILE
+PrototypeFSxNRagStack.AdGetSecretValueCommand6F5CE13F = aws secretsmanager get-secret-value --secret-id AdSecretsForMicrosoftAdXXXX --query SecretString --output text --profile YOUR_AWS_PROFILE | jq -r '.password'
 PrototypeFSxNRagStack.ApiLambdaRestApiEndpointFBD517A9 = https://XXXXX/prod/
 PrototypeFSxNRagStack.ApiecrdeployDockerImageCustomResourceReport4C700C0C = CodeBuild completed successfully, see the logs here: "https://console.aws.amazon.com/cloudwatch/home?region=ap-northeast-1#logsV2:log-groups/log-group/$252Faws$252Fcodebuild$252FApiecrdeployDockerImageDock-wibjFxy1ffI7/log-events/b074a47a-748b-4e32-ba17-2f984156b228"
 PrototypeFSxNRagStack.ChatAppAlbFargateServiceLoadBalancerDNS7F583184 = XXXX.ap-northeast-1.elb.amazonaws.com
@@ -129,21 +140,12 @@ AD Host インスタンスへのアクセスは[AWS Systems Manager Fleet Manage
 次のページで Username と Password を入力して Connect をクリックすると接続できます。
 
 - Username: `bedrock-01\Admin`
-- Pasword: デプロイ時に出力される以下のコマンドを実行した出力される password
+- Pasword: デプロイ時に出力される以下のコマンドの出力結果(正しく出力されない場合は、Secrets Manager のコンソールから確認可能です)。
 
 ```zsh
+aws secretsmanager get-secret-value --secret-id user01FSxNRagStackAdSecrets-7gf5q6u1JA2y --query SecretString --output text --profile YOUR_AWS_PROFILE | jq -r '.password'
 
-aws secretsmanager get-secret-value --secret-id AdSecretsForMicrosoftAdXXXX --profile YOUR_AWS_PROFILE
-{
-"ARN": "arn:aws:secretsmanager:ap-northeast-1:123456789012:secret:AdSecretsForMicrosoftAd0143-yjOEzWv0vmLG-rpAhGu",
-"Name": "AdSecretsForMicrosoftAdXXXX ",
-"VersionId": "6f9501fd-baf1-3f64-638b-ae0be2e7c2da",
-"SecretString": "{\"password\":\"XXXXXXXX\",\"username\":\"Admin\"}",
-"VersionStages": [
-"AWSCURRENT"
-],
-"CreatedDate": "2024-11-01T18:54:53.021000+09:00"
-}
+// `YOUR_AWS_PROFILE` はDeploy時に利用したAWS PROFILE NAME を利用してください。
 ```
 
 データのロードと権限設定に関しては、[こちら](https://aws.amazon.com/jp/blogs/machine-learning/build-rag-based-generative-ai-applications-in-aws-using-amazon-fsx-for-netapp-ontap-with-amazon-bedrock/)のブログの手順を参照ください。
@@ -172,6 +174,47 @@ PrototypeFSxNRagStack.NextJsurl26CBB678 = https://RAGChatbot.cloudfront.net
 ## Embedding server のスキャン間隔
 
 デフォルトでは[こちら](https://aws.amazon.com/jp/blogs/machine-learning/build-rag-based-generative-ai-applications-in-aws-using-amazon-fsx-for-netapp-ontap-with-amazon-bedrock/)のブログ設定と同じ、**5 分**間隔となっています。変更する場合は、Embedding Server の[env](docker/embed/.env)の`SCANNER_INTERVAL`の値を変更してください。
+
+## 権限テーブル
+
+DynamoDB の権限テーブルを用意することで、ログインユーザーのリソース(ベクトルデータ)へのアクセス権限を RAG チャットアプリケーションにて取得することができます。
+
+### Table definition
+
+| Partition Key (PK) | Type   |
+| :----------------- | :----- |
+| userId             | String |
+
+### Item attributes
+
+| Attribute name | Type    |
+| :------------- | :------ |
+| userId         | String  |
+| member         | Boolean |
+| SID            | List    |
+
+- example
+
+  ```json
+  {
+    "userId": {
+      "S": "user01"
+    },
+    "member": {
+      "BOOL": true
+    },
+    "SID": {
+      "L": [
+        {
+          "S": "S-1-5-21-XXXXXXX-YYYYYYY-ZZZZZZZZZ-ABCD" //Admin SID
+        },
+        {
+          "S": "S-1-X-X-X"
+        }
+      ]
+    }
+  }
+  ```
 
 ## Clean up
 

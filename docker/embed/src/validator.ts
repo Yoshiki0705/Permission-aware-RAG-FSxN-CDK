@@ -9,19 +9,8 @@ export async function validate() {
     process.env.REGION = process.env.ENV_REGION;
   }
 
-  // use external collection name if provided
-  if (process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME) {
-    process.env.OPEN_SEARCH_SERVERLESS_COLLECTION_NAME =
-      process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME;
-  }
-
-  const {
-    REGION,
-    BEDROCK_EMBEDDING_MODEL_ID,
-    DATA_DIRECTORY,
-    OPEN_SEARCH_SERVERLESS_COLLECTION_NAME,
-    INTERNAL_DB,
-  } = process.env;
+  const { REGION, BEDROCK_EMBEDDING_MODEL_ID, DATA_DIRECTORY, INTERNAL_DB } =
+    process.env;
 
   // Verify data directory exists
   try {
@@ -57,26 +46,34 @@ export async function validate() {
     process.exit(-1);
   }
 
-  // validate existing collection status and type
-  const collections = await listCollections(REGION);
-  const collection = collections.find(
-    ({ name }) => name === OPEN_SEARCH_SERVERLESS_COLLECTION_NAME
-  );
-  if (collection) {
-    const { status, type } = await getCollection(
-      REGION,
-      OPEN_SEARCH_SERVERLESS_COLLECTION_NAME
+  // use external collection name if provided
+  if (process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME) {
+    process.env.OPEN_SEARCH_SERVERLESS_COLLECTION_NAME =
+      process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME;
+
+    const { OPEN_SEARCH_SERVERLESS_COLLECTION_NAME } = process.env;
+
+    // validate existing collection status and type
+    const collections = await listCollections(REGION);
+    const collection = collections.find(
+      ({ name }) => name === OPEN_SEARCH_SERVERLESS_COLLECTION_NAME
     );
-    if (status !== "ACTIVE" || type !== "VECTORSEARCH") {
+    if (collection) {
+      const { status, type } = await getCollection(
+        REGION,
+        OPEN_SEARCH_SERVERLESS_COLLECTION_NAME
+      );
+      if (status !== "ACTIVE" || type !== "VECTORSEARCH") {
+        console.error(
+          `Collection ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME} in region ${REGION} is no active or not vector search`
+        );
+        process.exit(-1);
+      }
+    } else {
       console.error(
-        `Collection ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME} in region ${REGION} is no active or not vector search`
+        `Unable to find collection ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME} in region ${REGION}`
       );
       process.exit(-1);
     }
-  } else {
-    console.error(
-      `Unable to find collection ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME} in region ${REGION}`
-    );
-    process.exit(-1);
   }
 }

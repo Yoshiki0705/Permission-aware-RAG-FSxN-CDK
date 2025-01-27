@@ -1,6 +1,11 @@
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
 import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
-import { Peer, Port, SecurityGroup, Vpc } from "aws-cdk-lib/aws-ec2";
+import { IVpc, Peer, Port, SecurityGroup, Vpc } from "aws-cdk-lib/aws-ec2";
 import {
   CfnFileSystem,
   CfnStorageVirtualMachine,
@@ -8,11 +13,11 @@ import {
 } from "aws-cdk-lib/aws-fsx";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { CfnMicrosoftAD } from "aws-cdk-lib/aws-directoryservice";
-import { AdConfig } from "../../config";
 import { NagSuppressions } from "cdk-nag";
+import { AdConfig } from "../../types/type";
 
 interface FSxNProps extends AdConfig {
-  vpc: Vpc;
+  vpc: Vpc | IVpc;
   ad: CfnMicrosoftAD;
   adPassword: Secret;
 }

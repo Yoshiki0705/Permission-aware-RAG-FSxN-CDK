@@ -1,3 +1,8 @@
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
 import { Construct } from "constructs";
 import * as cdk from "aws-cdk-lib";
 
@@ -26,9 +31,13 @@ import {
   ViewerProtocolPolicy,
 } from "aws-cdk-lib/aws-cloudfront";
 import { FunctionUrlOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
-import { Effect, PolicyStatement, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import {
+  Effect,
+  ManagedPolicy,
+  PolicyStatement,
+  ServicePrincipal,
+} from "aws-cdk-lib/aws-iam";
 
-import { ChatAppConfig } from "../../config";
 import { TableV2 } from "aws-cdk-lib/aws-dynamodb";
 import { NagSuppressions } from "cdk-nag";
 import {
@@ -37,11 +46,20 @@ import {
   BucketEncryption,
   ObjectOwnership,
 } from "aws-cdk-lib/aws-s3";
+import { CognitoParams } from "./auth";
+import { ChatAppConfig } from "../../types/type";
+import { devConfig } from "../../config";
 
 interface LambdaWebAdapterProps extends ChatAppConfig {
   wafAttrArn: string;
   edgeFnVersion: Version;
   db: TableV2;
+  cognito: CognitoParams;
+  vpc?: cdk.aws_ec2.Vpc | cdk.aws_ec2.IVpc;
+}
+
+interface LambdaVpcConfig {
+  vpc?: cdk.aws_ec2.Vpc;
 }
 
 export class LambdaWebAdapter extends Construct {
@@ -54,13 +72,25 @@ export class LambdaWebAdapter extends Construct {
       tag: props.tag,
     });
 
+    let vpcConfiguration: LambdaVpcConfig | any = {};
+    if (props.vpc) {
+      vpcConfiguration.vpc = props.vpc;
+    }
+
     const lambda = new DockerImageFunction(this, "lambda", {
       code: DockerImageCode.fromEcr(chatAppRepository.repository, {
         tagOrDigest: props.tag,
       }),
-      architecture: Architecture.X86_64,
+      architecture: Architecture.ARM_64,
       memorySize: 2048,
       timeout: cdk.Duration.minutes(5),
+      environment: {
+        USER_POOL_ID: props.cognito.userPoolId,
+        USER_POOL_CLIENT_ID: props.cognito.userPoolClientId,
+        IDENTITY_ID: props.cognito.identityPoolId,
+        TABLE_NAME: props.db.tableName,
+      },
+      ...vpcConfiguration,
     });
 
     this.lambda = lambda;
@@ -72,7 +102,10 @@ export class LambdaWebAdapter extends Construct {
           "bedrock:InvokeModel",
           "bedrock:InvokeModelWithResponseStream",
         ],
-        resources: ["arn:aws:bedrock:*:*:foundation-model/*"],
+        resources: [
+          "arn:aws:bedrock:*:*:foundation-model/*",
+          "arn:aws:bedrock:*:*:inference-profile/*",
+        ],
       })
     );
     lambda.addToRolePolicy(
@@ -87,7 +120,25 @@ export class LambdaWebAdapter extends Construct {
         resources: [props.db.tableArn],
       })
     );
-
+    if (props.vpc) {
+      lambda.role!.addManagedPolicy(
+        ManagedPolicy.fromAwsManagedPolicyName(
+          "service-role/AWSLambdaVPCAccessExecutionRole"
+        )
+      );
+    }
+    if (devConfig.databaseConfig.userAccessTable) {
+      const userAccessTable = TableV2.fromTableName(
+        this,
+        "UserAccessTable",
+        devConfig.databaseConfig.userAccessTable!
+      );
+      userAccessTable.grantReadData(lambda);
+      lambda.addEnvironment(
+        "USER_ACCESS_TABLE_NAME",
+        devConfig.databaseConfig.userAccessTable
+      );
+    }
     lambda.node.addDependency(chatAppRepository);
 
     const functionUrl = lambda.addFunctionUrl({

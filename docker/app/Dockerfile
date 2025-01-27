@@ -1,4 +1,4 @@
-FROM public.ecr.aws/docker/library/python:3.12-slim
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/python:3.12-slim
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter
 ENV AWS_LWA_PORT=8501
 ENV AWS_LWA_READINESS_CHECK_PATH=/healthz
@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     software-properties-common \
     git \
-    && rm -rf /var/lib/apt/lists/* 
+    && rm -rf /var/lib/apt/lists/*
 
 RUN addgroup --gid 8000 streamlit && \
     adduser --uid 8000 --gid 8000 --disabled-password --gecos "" streamlit

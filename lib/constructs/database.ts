@@ -1,7 +1,14 @@
+/*
+ *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
+ *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
+ */
+
 import { TableV2 } from "aws-cdk-lib/aws-dynamodb";
 import { Construct } from "constructs";
-import { DatabaseConfig } from "../../config";
+import { devConfig } from "../../config";
 import { RemovalPolicy } from "aws-cdk-lib";
+import { DatabaseConfig } from "../../types/type";
 
 export class Database extends Construct {
   public readonly dynamo: TableV2;
@@ -10,7 +17,7 @@ export class Database extends Construct {
 
     this.dynamo = new TableV2(this, "SessionTable", {
       ...props,
-      tableName: "SessionTable",
+      tableName: `${devConfig.userName}-SessionTable`,
       deletionProtection: false,
       removalPolicy: RemovalPolicy.DESTROY,
     });

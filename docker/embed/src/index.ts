@@ -35,6 +35,7 @@ import {
 import { Document } from "langchain/document";
 import { DefaultMetadata, FileMetadata } from "./types/metadata";
 import { fromInstanceMetadata } from "@aws-sdk/credential-providers";
+import { addIndexDocument, batchDelete, batchUpdate } from "./aws/pgvector";
 
 async function main() {
   console.log("Starting...");
@@ -44,79 +45,104 @@ async function main() {
     process.env.REGION = process.env.ENV_REGION;
   }
 
-  // use external collection name if provided
+  const { SCANNER_INTERVAL } = process.env;
+
   if (process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME) {
     process.env.OPEN_SEARCH_SERVERLESS_COLLECTION_NAME =
       process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME;
-  }
 
-  const { REGION, OPEN_SEARCH_SERVERLESS_COLLECTION_NAME, SCANNER_INTERVAL } =
-    process.env;
-  console.log(
-    `Operating in region ${REGION}, collection name ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME}`
-  );
-
-  //
-  // Validate provided configuration
-  //
-  await validate();
-
-  //
-  // Reuse collection if it is already exists, create collection and index otherwise
-  //
-  let client: Client;
-  const indexName = `${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME}-index`;
-
-  const collections = await listCollections(REGION);
-  const collection = collections.find(
-    ({ name }) => name === OPEN_SEARCH_SERVERLESS_COLLECTION_NAME
-  );
-
-  if (collection) {
+    const { REGION, OPEN_SEARCH_SERVERLESS_COLLECTION_NAME } = process.env;
     console.log(
-      `Collection ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME} already exists`
+      `Operating in region ${REGION}, collection name ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME}`
     );
-    client = getClient(
-      REGION,
-      `https://${collection.id}.${REGION}.aoss.amazonaws.com`
+    //
+    // Validate provided configuration
+    //
+    await validate();
+
+    //
+    // Reuse collection if it is already exists, create collection and index otherwise
+    //
+    let client: Client;
+    const indexName = `${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME}-index`;
+
+    const collections = await listCollections(REGION);
+    const collection = collections.find(
+      ({ name }) => name === OPEN_SEARCH_SERVERLESS_COLLECTION_NAME
     );
 
-    // check if index exists
-    const { body } = await client.indices.exists({ index: indexName });
-    if (body) {
-      console.log(`Index ${indexName} exists`);
+    if (collection) {
+      console.log(
+        `Collection ${OPEN_SEARCH_SERVERLESS_COLLECTION_NAME} already exists`
+      );
+      client = getClient(
+        REGION,
+        `https://${collection.id}.${REGION}.aoss.amazonaws.com`
+      );
+
+      // check if index exists
+      const { body } = await client.indices.exists({ index: indexName });
+      if (body) {
+        console.log(`Index ${indexName} exists`);
+      } else {
+        console.log(`Index ${indexName} does not exist - creating`);
+        await createIndex(client, indexName);
+
+        // wait until the configuration propagates
+        await scheduler.wait(10000);
+      }
     } else {
-      console.log(`Index ${indexName} does not exist - creating`);
-      await createIndex(client, indexName);
-
-      // wait until the configuration propagates
-      await scheduler.wait(10000);
+      // we already validated collection existence in validation stage
+      process.exit(-1);
     }
+
+    // process immediately after start
+    await processFiles(client, REGION, indexName);
+
+    // prevent overlapping scan cycles
+    let isActive = false;
+    // process periodically
+    setInterval(async () => {
+      if (isActive) {
+        console.log("Skipping scanning cycle - previous cycle is still active");
+        return;
+      }
+
+      isActive = true;
+      await processFiles(client, REGION, indexName), ms(SCANNER_INTERVAL);
+      isActive = false;
+    }, ms(SCANNER_INTERVAL));
   } else {
-    // we already validated collection existence in validation stage
-    process.exit(-1);
+    // Validate provided configuration
+    //
+    const { REGION } = process.env;
+
+    await validate();
+    let client: Client;
+    // process immediately after start
+    await processFiles(client, REGION);
+
+    // prevent overlapping scan cycles
+    let isActive = false;
+    // process periodically
+    setInterval(async () => {
+      if (isActive) {
+        console.log("Skipping scanning cycle - previous cycle is still active");
+        return;
+      }
+
+      isActive = true;
+      await processFiles(client, REGION), ms(SCANNER_INTERVAL);
+      isActive = false;
+    }, ms(SCANNER_INTERVAL));
   }
-
-  // process immediately after start
-  await processFiles(client, indexName);
-
-  // prevent overlapping scan cycles
-  let isActive = false;
-
-  // process periodically
-  setInterval(async () => {
-    if (isActive) {
-      console.log("Skipping scanning cycle - previous cycle is still active");
-      return;
-    }
-
-    isActive = true;
-    await processFiles(client, indexName), ms(SCANNER_INTERVAL);
-    isActive = false;
-  }, ms(SCANNER_INTERVAL));
 }
 
-async function processFiles(client: Client, indexName: string) {
+async function processFiles(
+  client: Client,
+  region?: string,
+  indexName?: string
+) {
   const {
     // REGION,
     BEDROCK_EMBEDDING_MODEL_ID,
@@ -168,12 +194,16 @@ async function processFiles(client: Client, indexName: string) {
               const ids = file.documents.map(({ opensearchId }) => ({
                 id: opensearchId,
               }));
-              // perform partial update - update ACL field of existing document
-              await bulkUpdate(client, indexName, ids, {
-                metadata: {
-                  acl,
-                },
-              });
+              if (indexName) {
+                // perform partial update - update ACL field of existing document
+                await bulkUpdate(client, indexName!, ids, {
+                  metadata: {
+                    acl,
+                  },
+                });
+              } else {
+                await batchUpdate(ids, acl as string[], region!);
+              }
 
               // update ctime in internal db
               await updateFileCtimeById(fileSnapshot.id, ctimeMs);
@@ -192,7 +222,11 @@ async function processFiles(client: Client, indexName: string) {
               `Bulk deleting ${ids.length} documents from opensearch, file`,
               { path, ino }
             );
-            await bulkDelete(client, indexName, ids);
+            if (indexName) {
+              await bulkDelete(client, indexName!, ids);
+            } else {
+              await batchDelete(ids, region);
+            }
 
             console.log(`Deleting file ${fileSnapshot.id} from internal db`);
             await deleteFileById(fileSnapshot.id);
@@ -217,6 +251,7 @@ async function processFiles(client: Client, indexName: string) {
       // This should be changed once batching is supported for AWS SDK for JavaScript v3
       // https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html
       //
+
       const vectors = (
         await pMap(
           documents,
@@ -242,25 +277,39 @@ async function processFiles(client: Client, indexName: string) {
         `${vectors.length} vectors created for file ${path} and ino ${ino}`
       );
 
-      // OpenSearch serverless does not support providing _id while indexing
-      // Langchain uses bulk index operation which does not return ids generated by OpenSearch
-      // we have to index documents one by one
       const ids = await pMap(
         documents,
         async ({ metadata, pageContent }, idx) => {
-          console.log("mergetMetadata:", merge(metadata, file));
-          const { _id } = await indexDocument(client, indexName, {
-            metadata: merge(metadata, file),
-            text: pageContent,
-            vector_field: vectors[idx],
-          });
-          return _id;
+          // OpenSearch serverless does not support providing _id while indexing
+          // Langchain uses bulk index operation which does not return ids generated by OpenSearch
+          // we have to index documents one by one
+          if (indexName) {
+            const { _id } = await indexDocument(client, indexName!, {
+              metadata: merge(metadata, file),
+              text: pageContent,
+              vector_field: vectors[idx],
+            });
+            return _id;
+          } else {
+            // Aurora processing
+            const uuid = randomUUID();
+            await addIndexDocument(
+              {
+                metadata: merge(metadata, file),
+                text: pageContent,
+                vector_field: vectors[idx],
+              },
+              bedrockEmbeddings,
+              process.env.REGION,
+              uuid
+            );
+            return uuid;
+          }
         },
         { concurrency: parseInt(DOCUMENTS_INDEXING_CONCURRENCY) }
       );
 
-      console.log(`${ids.length} documents persisted in opensearch`);
-
+      console.log(`${ids.length} documents persisted in vector store`);
       //
       // update internal DB
       // it holds information about files and documents
@@ -276,7 +325,13 @@ async function processFiles(client: Client, indexName: string) {
     { concurrency: parseInt(FILES_PROCESSING_CONCURRENCY) }
   );
 
-  await cleanup(client, indexName, scanId);
+  if (indexName) {
+    console.log("opensearch cleanup");
+    await cleanup(scanId, indexName!, client!);
+  } else {
+    console.log("aurora cleanup");
+    await cleanup(scanId);
+  }
 }
 
 function merge(documentMetadata: DefaultMetadata, fileMetadata: FileMetadata) {
@@ -318,7 +373,7 @@ function load(path: string) {
   }
 }
 
-async function cleanup(client: Client, indexName: string, scanId: string) {
+async function cleanup(scanId: string, indexName?: string, client?: Client) {
   console.log("Cleanup stage");
   // find files with scan id different then the current one
   const files = await findFilesByNotScanId(scanId);
@@ -334,8 +389,14 @@ async function cleanup(client: Client, indexName: string, scanId: string) {
     const ids = files
       .map(({ documents }) => documents.map(({ opensearchId }) => opensearchId))
       .flat();
-    console.log(`Deleting ${ids.length} documents from opensearch`);
-    await bulkDelete(client, indexName, ids);
+    console.log(`Deleting ${ids.length} documents from vector store`);
+    if (indexName) {
+      console.log("openseach bulkDelete");
+      await bulkDelete(client, indexName, ids);
+    } else {
+      console.log("aurora batchDelete");
+      await batchDelete(ids, process.env.ENV_REGION);
+    }
 
     // delete files and documents from the internal db
     await deleteFilesByNotScanId(scanId);
