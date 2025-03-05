@@ -15,6 +15,7 @@ import { Secret } from "aws-cdk-lib/aws-secretsmanager";
 import { CfnMicrosoftAD } from "aws-cdk-lib/aws-directoryservice";
 import { NagSuppressions } from "cdk-nag";
 import { AdConfig } from "../../types/type";
+import { StringParameter } from "aws-cdk-lib/aws-ssm";
 
 interface FSxNProps extends AdConfig {
   vpc: Vpc | IVpc;
@@ -76,22 +77,21 @@ export class FSxN extends Construct {
 
     const fileSystem = new CfnFileSystem(this, "FileSystem", {
       fileSystemType: "ONTAP",
-      subnetIds: privateSubnets,
-      storageCapacity: 2048,
+      subnetIds: [privateSubnets[0]],
+      storageCapacity: 1024,
       securityGroupIds: [fileSystemSg.securityGroupId],
       ontapConfiguration: {
-        deploymentType: "MULTI_AZ_1",
-        throughputCapacity: 512,
+        deploymentType: "SINGLE_AZ_1",
+        throughputCapacity: 128,
         fsxAdminPassword: new cdk.CfnDynamicReference(
           cdk.CfnDynamicReferenceService.SECRETS_MANAGER,
           `${fsxPassword.secretArn}:SecretString:password`
         ).toString(),
-        routeTableIds: props.vpc.privateSubnets.map(
-          (subnet) => subnet.routeTable.routeTableId
-        ),
         preferredSubnetId: privateSubnets[0],
       },
     });
+    
+    
     const svm = new CfnStorageVirtualMachine(this, "SVM", {
       fileSystemId: fileSystem.ref,
       name: "brsvm",
@@ -159,5 +159,30 @@ export class FSxN extends Construct {
       ],
       true
     );
+    const ontapConfigProperty = this.ragdbVolume
+      .ontapConfiguration as CfnVolume.OntapConfigurationProperty;
+      
+    new StringParameter(this, 'FSxId', {
+      parameterName:'FSxId',
+      stringValue: svm.fileSystemId
+    })
+    new StringParameter(this, 'SvmRef', {
+      parameterName:'SvmRef',
+      stringValue: svm.ref
+    })
+    new StringParameter(this, 'SvmId', {
+      parameterName:'SvmId',
+      stringValue: svm.attrStorageVirtualMachineId
+    })
+    new StringParameter(this, 'BedrockVolumeName', {
+      parameterName:'BedrockVolumeName',
+      stringValue: this.bedrockRagVolume.name
+    })
+    if (ontapConfigProperty.junctionPath) {
+      new StringParameter(this, 'JunctionPath', {
+        parameterName:'JunctionPath',
+        stringValue: ontapConfigProperty.junctionPath
+      })
+    }
   }
 }

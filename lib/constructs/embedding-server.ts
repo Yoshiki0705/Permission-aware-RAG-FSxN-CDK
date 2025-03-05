@@ -32,26 +32,31 @@ import {
 import { CfnMicrosoftAD } from "aws-cdk-lib/aws-directoryservice";
 import { CfnCollection } from "aws-cdk-lib/aws-opensearchserverless";
 import { ECR } from "./repository";
-import { FSxN } from "./fsx";
-import { CfnVolume } from "aws-cdk-lib/aws-fsx";
-import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+import { StringParameter } from "aws-cdk-lib/aws-ssm";
+import { ISecret } from "aws-cdk-lib/aws-secretsmanager";
 import { NagSuppressions } from "cdk-nag";
 import { DatabaseCluster } from "aws-cdk-lib/aws-rds";
 
 interface EmbeddingServerProps extends cdk.StackProps {
   vpc: Vpc | IVpc;
   vector: CfnCollection | DatabaseCluster;
-  adSecret: Secret;
+  adSecret: ISecret;
   role: Role;
   imagePath: string;
   tag: string;
-  fsx: FSxN;
 }
 export class EmbeddingServer extends Construct {
   public readonly microsoftAd: CfnMicrosoftAD;
   public readonly instance: Instance;
   constructor(scope: Construct, id: string, props: EmbeddingServerProps) {
     super(scope, id);
+
+    const fsxId = process.env.EMBEDDED_VOL_FSX_ID || StringParameter.valueFromLookup(this,'FSxId')
+    // svmrefとsvmidは一緒
+    const svmRef = process.env.EMBEDDED_VOL_SVM_REF || StringParameter.valueFromLookup(this,'SvmRef')
+    const svmId = process.env.EMBEDDED_VOL_SVM_ID ||StringParameter.valueFromLookup(this,'SvmId')
+    const bedrockVolumeName = process.env.EMBEDDED_VOL_NAME || StringParameter.valueFromLookup(this,'BedrockVolumeName')
+    const junctionPath = process.env.EMBEDDED_VOL_PATH || StringParameter.valueFromLookup(this,'JunctionPath')
 
     const embeddingRepository = new ECR(this, "Ecr", {
       path: `${props.imagePath}/embed`,
@@ -195,9 +200,6 @@ export class EmbeddingServer extends Construct {
     const key = new KeyPair(this, "Key");
     key.applyRemovalPolicy(cdk.RemovalPolicy.DESTROY);
 
-    const ontapConfigProperty = props.fsx.ragdbVolume
-      .ontapConfiguration as CfnVolume.OntapConfigurationProperty;
-
     const userData = UserData.forLinux({ shebang: "#!/bin/sh" });
     userData.addCommands(
       "set -ex",
@@ -242,7 +244,7 @@ print(get_secret())' > /tmp/get_password.py`,
       `echo 'import boto3
 fsx = boto3.client("fsx",region_name="${cdk.Stack.of(this).region}")
 response = fsx.describe_storage_virtual_machines(StorageVirtualMachineIds=["${
-        props.fsx.svm.ref
+        svmRef
       }"])
 print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0])' > /tmp/get_svm_endpoint.py`,
 
@@ -256,11 +258,11 @@ print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0
       "fi",
       "SMB_IP=$(python3 /tmp/get_svm_endpoint.py)",
 
-      `sudo mount -t cifs //$SMB_IP/c$/${props.fsx.bedrockRagVolume.name} /tmp/data -o user=Admin,password="$AD_PASSWORD",domain=bedrock-01.com,iocharset=utf8,mapchars,mfsymlinks`,
-      `sudo mount -t nfs ${props.fsx.svm.attrStorageVirtualMachineId}.${
-        props.fsx.svm.fileSystemId
+      `sudo mount -t cifs //$SMB_IP/c$/${bedrockVolumeName} /tmp/data -o user=Admin,password="$AD_PASSWORD",domain=bedrock-01.com,iocharset=utf8,mapchars,mfsymlinks`,
+      `sudo mount -t nfs ${svmId}.${
+        fsxId
       }.fsx.${cdk.Stack.of(this).region}.amazonaws.com:${
-        ontapConfigProperty.junctionPath
+        junctionPath
       } /tmp/db`,
       `sudo aws ecr get-login-password --region ${
         cdk.Stack.of(this).region

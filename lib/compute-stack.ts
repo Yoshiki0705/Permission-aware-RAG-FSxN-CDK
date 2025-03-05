@@ -1,68 +1,43 @@
-/*
- *  Copyright 2025 Amazon.com, Inc. or its affiliates. All Rights Reserved.
- *  SPDX-License-Identifier: LicenseRef-.amazon.com.-AmznSL-1.0
- *  Licensed under the Amazon Software License  http://aws.amazon.com/asl/
- */
-
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
-import { Network } from "./constructs/network";
 import { devConfig } from "../config";
-import { Database } from "./constructs/database";
-import { ChatApp } from "./constructs/app";
+import { EmbeddingServer } from "./constructs/embedding-server";
 import { LambdaWebAdapter } from "./constructs/lambda-web-adapter";
-import { Api } from "./constructs/api";
 import { VectorDB } from "./constructs/vector";
+import { Database } from "./constructs/database";
+import { Auth } from "./constructs/auth";
 import {
   Effect,
   PolicyStatement,
   Role,
   ServicePrincipal,
 } from "aws-cdk-lib/aws-iam";
-import { FSxN } from "./constructs/fsx";
-import { Ad } from "./constructs/ad";
-import { EmbeddingServer } from "./constructs/embedding-server";
-import { NagSuppressions } from "cdk-nag";
 import { Version } from "aws-cdk-lib/aws-lambda";
-import { Auth } from "./constructs/auth";
+import { NagSuppressions } from "cdk-nag";
+import { Vpc } from "aws-cdk-lib/aws-ec2";
+import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+import { StringParameter } from "aws-cdk-lib/aws-ssm";
 
-interface FSxNRagStackProps extends cdk.StackProps {
+interface CopmuteStackProps extends cdk.StackProps {
   wafAttrArn: string;
   edgeFnVersion: Version;
 }
 
-export class FSxNRagStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props: FSxNRagStackProps) {
+export class ComputeStack extends cdk.Stack {
+  constructor(scope: Construct, id: string,  props: CopmuteStackProps) {
     super(scope, id, props);
-
-    const network = new Network(this, `${id}-Network`, {
-      ...devConfig.networkConfig,
+    
+    const vpc = Vpc.fromLookup(this, "VpcId", {
+      vpcId: StringParameter.valueFromLookup(this,'VpcId'),
     });
 
-    const ad = new Ad(this, `${id}-Ad`, {
-      vpc: network.vpc,
-      ...devConfig.adConfig,
-    });
-
-    const fsx = new FSxN(this, `${id}-FSx`, {
-      vpc: network.vpc,
-      ad: ad.microsoftAd,
-      adPassword: ad.adPasswoed,
-      ...devConfig.adConfig,
-    });
-
-    const db = new Database(this, `${id}-Database`, {
-      ...devConfig.databaseConfig,
-    });
-
-    // const api = new Api(this, "Api", {
-    //   ...devConfig.chatAppConfig,
-    //   db: db.dynamo,
-    //   collectionName: devConfig.vectorConfig.collectionName,
-    // });
+    const adpasswd = Secret.fromSecretCompleteArn(this, "AdPasswd", cdk.Fn.importValue('AdPasswdArn'));
 
     const embeddingServerRole = new Role(this, `${id}-EmbeddingServerRole`, {
       assumedBy: new ServicePrincipal("ec2.amazonaws.com"),
+    });
+    const db = new Database(this, `${id}-Database`, {
+      ...devConfig.databaseConfig,
     });
 
     const auth = new Auth(this, `${id}-Auth`, {
@@ -76,17 +51,16 @@ export class FSxNRagStack extends cdk.Stack {
       edgeFnVersion: props.edgeFnVersion,
       db: db.dynamo,
       cognito: auth.cognitoParams,
-      vpc: network.vpc,
+      vpc: vpc,
     });
 
     const vector = new VectorDB(this, `${id}-VectorSearch`, {
       roles: [
-        // api.lambda.role!.roleArn,
         embeddingServerRole.roleArn,
         web.lambda.role!.roleArn,
       ],
       ...devConfig.vectorConfig,
-      vpc: network.vpc,
+      vpc: vpc,
     });
 
     if (vector.db instanceof cdk.aws_rds.DatabaseCluster) {
@@ -109,14 +83,6 @@ export class FSxNRagStack extends cdk.Stack {
           resources: [vector.db.attrArn],
         })
       );
-      // api.lambda.addEnvironment("AOSS_HOST", vector.aoss.attrCollectionEndpoint);
-      // api.lambda.addToRolePolicy(
-      //   new PolicyStatement({
-      //     effect: Effect.ALLOW,
-      //     actions: ["aoss:APIAccessAll"],
-      //     resources: [vector.aoss.attrArn],
-      //   })
-      // );
     }
 
     web.lambda.addToRolePolicy(
@@ -133,25 +99,14 @@ export class FSxNRagStack extends cdk.Stack {
     );
 
     const embeddingServer = new EmbeddingServer(this, `${id}-EmbeddingSever`, {
-      vpc: network.vpc,
+      vpc: vpc,
       vector: vector.db,
-      adSecret: ad.adPasswoed,
+      adSecret: adpasswd,
       role: embeddingServerRole,
       imagePath: devConfig.chatAppConfig.imagePath,
       tag: devConfig.chatAppConfig.tag,
-      fsx: fsx,
     });
     embeddingServer.instance.node.addDependency(vector.db);
-
-    // new ChatApp(this, "ChatApp", {
-    //   ...devConfig.chatAppConfig,
-    //   allowedIps: devConfig.allowedIps,
-    //   vpc: network.vpc,
-    //   api: api.restApi,
-    //   hostZone: network.hostZone,
-    //   domainName: devConfig.networkConfig.appDomainName,
-    //   certificate: network.certificate,
-    // });
 
     NagSuppressions.addResourceSuppressions(
       embeddingServerRole,

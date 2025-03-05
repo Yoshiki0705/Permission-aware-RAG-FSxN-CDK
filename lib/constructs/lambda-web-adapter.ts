@@ -81,7 +81,7 @@ export class LambdaWebAdapter extends Construct {
       code: DockerImageCode.fromEcr(chatAppRepository.repository, {
         tagOrDigest: props.tag,
       }),
-      architecture: Architecture.ARM_64,
+      architecture: Architecture.X86_64,
       memorySize: 2048,
       timeout: cdk.Duration.minutes(5),
       environment: {

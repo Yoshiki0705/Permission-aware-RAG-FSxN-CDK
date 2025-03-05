@@ -19,17 +19,10 @@ import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { isEmpty } from "lodash";
 import { NetworkConfig } from "../../types/type";
-// import { IHostedZone, PublicHostedZone } from "aws-cdk-lib/aws-route53";
-// import {
-//   Certificate,
-//   CertificateValidation,
-// } from "aws-cdk-lib/aws-certificatemanager";
-// import { DomainRegister } from "./domain";
+import { StringParameter } from "aws-cdk-lib/aws-ssm";
 
 export class Network extends Construct {
   public readonly vpc: Vpc | IVpc;
-  // public readonly hostZone: IHostedZone | PublicHostedZone;
-  // public readonly certificate: Certificate;
   constructor(scope: Construct, id: string, props: NetworkConfig) {
     super(scope, id);
 
@@ -97,18 +90,9 @@ export class Network extends Construct {
         service: InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
       });
     }
-
-    // const domain = new DomainRegister({
-    //   construct: this,
-    //   appDomainName: props.appDomainName,
-    //   existingRoute53: props.existingRoute53,
-    // });
-
-    // this.hostZone = domain.hostedZone;
-
-    // this.certificate = new Certificate(this, "Cert", {
-    //   domainName: props.appDomainName,
-    //   validation: CertificateValidation.fromDns(this.hostZone),
-    // });
+    new StringParameter(this, 'VpcId', {
+      parameterName:'VpcId',
+      stringValue: this.vpc.vpcId
+    })
   }
 }
