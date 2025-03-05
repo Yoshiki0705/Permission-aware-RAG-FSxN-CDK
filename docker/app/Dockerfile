@@ -1,4 +1,4 @@
-FROM --platform=linux/arm64 public.ecr.aws/docker/library/python:3.12-slim
+FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.8.4 /lambda-adapter /opt/extensions/lambda-adapter
 ENV AWS_LWA_PORT=8501
 ENV AWS_LWA_READINESS_CHECK_PATH=/healthz

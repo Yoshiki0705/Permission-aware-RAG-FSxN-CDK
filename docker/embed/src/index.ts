@@ -35,7 +35,7 @@ import {
 import { Document } from "langchain/document";
 import { DefaultMetadata, FileMetadata } from "./types/metadata";
 import { fromInstanceMetadata } from "@aws-sdk/credential-providers";
-import { addIndexDocument, batchDelete, batchUpdate } from "./aws/pgvector";
+import { initPgVectorClient, addIndexDocument, batchDelete, batchUpdate } from "./aws/pgvector";
 
 async function main() {
   console.log("Starting...");
@@ -116,6 +116,18 @@ async function main() {
     // Validate provided configuration
     //
     const { REGION } = process.env;
+    // use aurora serverless client
+    const bedrockEmbeddings = new BedrockEmbeddings({
+      region: "us-east-1",
+      model: process.env.BEDROCK_EMBEDDING_MODEL_ID,
+      credentials: fromInstanceMetadata({
+        maxRetries: 4,
+        timeout: 2000,
+      }),
+    });
+    const pgVectorStoreClient = await initPgVectorClient(
+      process.env.REGION, bedrockEmbeddings
+    )
 
     await validate();
     let client: Client;
@@ -132,7 +144,7 @@ async function main() {
       }
 
       isActive = true;
-      await processFiles(client, REGION), ms(SCANNER_INTERVAL);
+      await processFiles(client, REGION,null,pgVectorStoreClient,bedrockEmbeddings), ms(SCANNER_INTERVAL);
       isActive = false;
     }, ms(SCANNER_INTERVAL));
   }
@@ -141,11 +153,12 @@ async function main() {
 async function processFiles(
   client: Client,
   region?: string,
-  indexName?: string
+  indexName?: string,
+  pgVectorStoreClient?,
+  bedrockEmbeddings?
 ) {
   const {
     // REGION,
-    BEDROCK_EMBEDDING_MODEL_ID,
     DATA_DIRECTORY,
     FILES_PROCESSING_CONCURRENCY,
     DOCUMENTS_INDEXING_CONCURRENCY,
@@ -164,163 +177,158 @@ async function processFiles(
   const scanId = randomUUID();
   console.log("Current scan id", scanId);
 
-  const bedrockEmbeddings = new BedrockEmbeddings({
-    region: "us-east-1",
-    model: BEDROCK_EMBEDDING_MODEL_ID,
-    credentials: fromInstanceMetadata({
-      maxRetries: 4,
-      timeout: 2000,
-    }),
-  });
-
   await pMap(
     files,
     async (file, index) => {
-      const { path, ino, mtimeMs, ctimeMs, acl } = file;
+      const { path, ino, mtimeMs, ctimeMs, acl, size } = file;
       console.log(`Handling file ${index + 1} out of ${files.length}`, {
         path,
         ino,
       });
 
       const fileSnapshot = await findFileByIno(ino);
-      if (fileSnapshot) {
-        if (fileSnapshot.mtimeMs === mtimeMs) {
-          console.log("Existing file - no changes", { path, ino });
+      if (size > 0){
+        if (fileSnapshot) {
+          if (fileSnapshot.mtimeMs === mtimeMs) {
+            console.log("Existing file - no changes", { path, ino });
 
-          if (fileSnapshot.ctimeMs !== ctimeMs) {
-            console.log(`File attributes changed -> updating ACL`);
+            if (fileSnapshot.ctimeMs !== ctimeMs) {
+              console.log(`File attributes changed -> updating ACL`);
+              const file = await findFileById(fileSnapshot.id);
+              if (file) {
+                const ids = file.documents.map(({ opensearchId }) => ({
+                  id: opensearchId,
+                }));
+                if (indexName) {
+                  // perform partial update - update ACL field of existing document
+                  await bulkUpdate(client, indexName!, ids, {
+                    metadata: {
+                      acl,
+                    },
+                  });
+                } else {
+                  await batchUpdate(ids, acl as string[], region!);
+                }
+
+                // update ctime in internal db
+                await updateFileCtimeById(fileSnapshot.id, ctimeMs);
+              }
+            }
+
+            await updateFileScanIdById(fileSnapshot.id, scanId);
+            return;
+          } else {
+            console.log("Existing file - with changes", { path, ino });
+
             const file = await findFileById(fileSnapshot.id);
             if (file) {
-              const ids = file.documents.map(({ opensearchId }) => ({
-                id: opensearchId,
-              }));
+              const ids = file.documents.map(({ opensearchId }) => opensearchId);
+              console.log(
+                `Bulk deleting ${ids.length} documents from opensearch, file`,
+                { path, ino }
+              );
               if (indexName) {
-                // perform partial update - update ACL field of existing document
-                await bulkUpdate(client, indexName!, ids, {
-                  metadata: {
-                    acl,
-                  },
-                });
+                await bulkDelete(client, indexName!, ids);
               } else {
-                await batchUpdate(ids, acl as string[], region!);
+                await batchDelete(ids, region);
               }
 
-              // update ctime in internal db
-              await updateFileCtimeById(fileSnapshot.id, ctimeMs);
-            }
-          }
-
-          await updateFileScanIdById(fileSnapshot.id, scanId);
-          return;
-        } else {
-          console.log("Existing file - with changes", { path, ino });
-
-          const file = await findFileById(fileSnapshot.id);
-          if (file) {
-            const ids = file.documents.map(({ opensearchId }) => opensearchId);
-            console.log(
-              `Bulk deleting ${ids.length} documents from opensearch, file`,
-              { path, ino }
-            );
-            if (indexName) {
-              await bulkDelete(client, indexName!, ids);
+              console.log(`Deleting file ${fileSnapshot.id} from internal db`);
+              await deleteFileById(fileSnapshot.id);
+              console.log(`Processing file ${path}, ino ${ino} as if it was new`);
             } else {
-              await batchDelete(ids, region);
+              throw new Error(`Failed to find file by id ${fileSnapshot.id}`);
             }
-
-            console.log(`Deleting file ${fileSnapshot.id} from internal db`);
-            await deleteFileById(fileSnapshot.id);
-            console.log(`Processing file ${path}, ino ${ino} as if it was new`);
-          } else {
-            throw new Error(`Failed to find file by id ${fileSnapshot.id}`);
           }
+        } else {
+          console.log("New file", { path, ino });
         }
-      } else {
-        console.log("New file", { path, ino });
-      }
 
-      const documents = await toDocuments(path);
-      if (!documents) {
-        return;
-      }
 
-      console.log(`File ${path} converted to ${documents.length} documents`);
+        const documents = await toDocuments(path);
+        if (!documents) {
+          return;
+        }
 
-      //
-      // Manage embedding concurrency in order to avoid throttling
-      // This should be changed once batching is supported for AWS SDK for JavaScript v3
-      // https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html
-      //
+        console.log(`File ${path} converted to ${documents.length} documents`);
 
-      const vectors = (
-        await pMap(
-          documents,
-          async ({ pageContent }, idx) => {
-            if (idx % 100 === 0) {
-              console.log(
-                `Embedding document ${idx + 1} out of ${documents.length}`
-              );
+        //
+        // Manage embedding concurrency in order to avoid throttling
+        // This should be changed once batching is supported for AWS SDK for JavaScript v3
+        // https://docs.aws.amazon.com/bedrock/latest/userguide/batch-inference.html
+        //
+
+        const vectors = (
+          await pMap(
+            documents,
+            async ({ pageContent }, idx) => {
+              if (idx % 100 === 0) {
+                console.log(
+                  `Embedding document ${idx + 1} out of ${documents.length}`
+                );
+              }
+
+              const vector = await bedrockEmbeddings.embedDocuments([
+                pageContent,
+              ]);
+              return vector;
+            },
+            {
+              concurrency: parseInt(EMBEDDING_CONCURRENCY),
             }
+          )
+        ).flat();
 
-            const vector = await bedrockEmbeddings.embedDocuments([
-              pageContent,
-            ]);
-            return vector;
-          },
-          {
-            concurrency: parseInt(EMBEDDING_CONCURRENCY),
-          }
-        )
-      ).flat();
+        console.log(
+          `${vectors.length} vectors created for file ${path} and ino ${ino}`
+        );
 
-      console.log(
-        `${vectors.length} vectors created for file ${path} and ino ${ino}`
-      );
-
-      const ids = await pMap(
-        documents,
-        async ({ metadata, pageContent }, idx) => {
-          // OpenSearch serverless does not support providing _id while indexing
-          // Langchain uses bulk index operation which does not return ids generated by OpenSearch
-          // we have to index documents one by one
-          if (indexName) {
-            const { _id } = await indexDocument(client, indexName!, {
-              metadata: merge(metadata, file),
-              text: pageContent,
-              vector_field: vectors[idx],
-            });
-            return _id;
-          } else {
-            // Aurora processing
-            const uuid = randomUUID();
-            await addIndexDocument(
-              {
+        const ids = await pMap(
+          documents,
+          async ({ metadata, pageContent }, idx) => {
+            // OpenSearch serverless does not support providing _id while indexing
+            // Langchain uses bulk index operation which does not return ids generated by OpenSearch
+            // we have to index documents one by one
+            if (indexName) {
+              const { _id } = await indexDocument(client, indexName!, {
                 metadata: merge(metadata, file),
                 text: pageContent,
                 vector_field: vectors[idx],
-              },
-              bedrockEmbeddings,
-              process.env.REGION,
-              uuid
-            );
-            return uuid;
-          }
-        },
-        { concurrency: parseInt(DOCUMENTS_INDEXING_CONCURRENCY) }
-      );
+              });
+              return _id;
+            } else {
+              // Aurora processing
+              const uuid = randomUUID();
+              await addIndexDocument(
+                {
+                  metadata: merge(metadata, file),
+                  text: pageContent,
+                  vector_field: vectors[idx],
+                },
+                pgVectorStoreClient,
+                uuid
+              );
+              return uuid;
+            }
+          },
+          { concurrency: parseInt(DOCUMENTS_INDEXING_CONCURRENCY) }
+        );
 
-      console.log(`${ids.length} documents persisted in vector store`);
-      //
-      // update internal DB
-      // it holds information about files and documents
-      // connects between periodic file system scanner and opensearch
-      //
-      const [{ fileId }] = await insertFile(ino, mtimeMs, ctimeMs, scanId);
-      console.log(`File ino ${ino} persisted in internal db with id ${fileId}`);
-      await insertDocuments(fileId, ids);
-      console.log(
-        `${ids.length} documents of file id ${fileId} persisted in internal db`
-      );
+        console.log(`${ids.length} documents persisted in vector store`);
+        //
+        // update internal DB
+        // it holds information about files and documents
+        // connects between periodic file system scanner and opensearch
+        //
+        const [{ fileId }] = await insertFile(ino, mtimeMs, ctimeMs, scanId);
+        console.log(`File ino ${ino} persisted in internal db with id ${fileId}`);
+        await insertDocuments(fileId, ids);
+        console.log(
+          `${ids.length} documents of file id ${fileId} persisted in internal db`
+        );
+      } else {
+        console.log("Empty file", { path, ino })
+      }
     },
     { concurrency: parseInt(FILES_PROCESSING_CONCURRENCY) }
   );

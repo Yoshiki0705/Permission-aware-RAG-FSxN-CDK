@@ -6,6 +6,7 @@
 
 import { Attribute, Billing } from "aws-cdk-lib/aws-dynamodb";
 import { ApplicationLoadBalancedFargateServiceProps } from "aws-cdk-lib/aws-ecs-patterns";
+import { ISubnet } from "aws-cdk-lib/aws-ec2";
 
 export type Config = {
   /**
@@ -44,10 +45,11 @@ export type Config = {
   databaseConfig: DatabaseConfig;
 
   /**
-   * Active Directory configuration
-   * @type {AdConfig}
+   * FSx configuration
+   * @type {FsxConfig}
    */
-  adConfig: AdConfig;
+  fsxConfig: FsxConfig;
+
   /**
    * ChatApp configuration
    * @type {ChatAppConfig}
@@ -138,20 +140,77 @@ export type DatabaseConfig = {
 
 export type AdConfig = {
   /**
-   * Ad username
+   * Define whether use existing AD or not
+   * @type {boolean}
    */
-  adUsername: string;
+  existingAd: boolean;
   /**
-   * Organizational Unit
-   * @type {string}
+   * SVM Net BIOS Name
    */
-  ou: string;
+  svmNetBiosName: string;
   /**
-   * Domain name
-   * @type {string}
+   * SVM AD Ips
+   *  @type {string[]}
    */
-  domainName: string;
+  adDnsIps: string[];
+  /**
+   * AD domainName
+   */
+  adDomainName: string;
+  /**
+   * 	The password for the default administrative user named Admin.
+   */
+  adAdminPassword: string;
+  /**
+   * The user name for the service account on your self-managed AD domain that Amazon FSx will use to join to your AD domain.
+   */
+  serviceAccountUserName: string;
+  /**
+   * The password for the service account on your self-managed AD domain that Amazon FSx will use to join to your AD domain.
+   */
+  serviceAccountPassword: string;
+  /**
+   * (Optional) The fully qualified distinguished name of the organizational unit within your self-managed AD directory.
+   */
+  adOu: string;
+  /**
+   * (Optional) The name of the domain group whose members are granted administrative privileges for the file system.
+   */
+  fileSystemAdministratorsGroup: string;
 };
+
+export type FsxConfig = {
+  /**
+   * File System SubnetIds
+   *  @type {string[]}
+   */
+  subnetIds: string[];
+  /**
+   * File System Storage Capacity
+   */
+  storageCapacity: number;
+  /**
+   * File System Deployment Type
+   */
+  deploymentType: 'MULTI_AZ_1' | "SINGLE_AZ_1"
+  /**
+   * File System Throughput Capacity
+   */
+  throughputCapacity: number;
+  /**
+   * File System Admin Password
+   */
+  fsxAdminPassword: string;
+  /**
+   * AD Config
+   */
+  adConfig: AdConfig;
+};
+
+export type Subnets ={
+  subnetId: string;
+  availabilityZone: string;
+}
 
 export type ChatAppConfig = {
   /**
@@ -161,10 +220,20 @@ export type ChatAppConfig = {
   imagePath: string;
 
   /**
-   * Taf for image.
+   * Tag for image.
    * @type {string}
    */
   tag: string;
+  /**
+   * lambdaに特定のVPCを指定する場合
+   * @type {string}
+   */
+  lambdaVpcId: string;
+  /**
+   * lambdaに特定のVPC Subnetを指定する場合
+   * @type {string[]}
+   */
+  lambdaVpcSubnets: Subnets[];
 
   /**
    * Fargate cluster config

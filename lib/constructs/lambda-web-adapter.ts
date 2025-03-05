@@ -16,6 +16,7 @@ import {
   InvokeMode,
   Version,
 } from "aws-cdk-lib/aws-lambda";
+import { ISubnet, Subnet, Vpc } from "aws-cdk-lib/aws-ec2";
 import { ECR } from "./repository";
 import {
   AllowedMethods,
@@ -50,16 +51,17 @@ import { CognitoParams } from "./auth";
 import { ChatAppConfig } from "../../types/type";
 import { devConfig } from "../../config";
 
+interface VpcConfig {
+  vpc: cdk.aws_ec2.Vpc;
+  subnets: ISubnet[];
+}
+
 interface LambdaWebAdapterProps extends ChatAppConfig {
   wafAttrArn: string;
   edgeFnVersion: Version;
   db: TableV2;
   cognito: CognitoParams;
-  vpc?: cdk.aws_ec2.Vpc | cdk.aws_ec2.IVpc;
-}
-
-interface LambdaVpcConfig {
-  vpc?: cdk.aws_ec2.Vpc;
+  vpcConfig: VpcConfig;
 }
 
 export class LambdaWebAdapter extends Construct {
@@ -71,11 +73,6 @@ export class LambdaWebAdapter extends Construct {
       path: `${props.imagePath}/nextjs`,
       tag: props.tag,
     });
-
-    let vpcConfiguration: LambdaVpcConfig | any = {};
-    if (props.vpc) {
-      vpcConfiguration.vpc = props.vpc;
-    }
 
     const lambda = new DockerImageFunction(this, "lambda", {
       code: DockerImageCode.fromEcr(chatAppRepository.repository, {
@@ -90,7 +87,8 @@ export class LambdaWebAdapter extends Construct {
         IDENTITY_ID: props.cognito.identityPoolId,
         TABLE_NAME: props.db.tableName,
       },
-      ...vpcConfiguration,
+      vpc: props.vpcConfig.vpc,
+      vpcSubnets: {subnets: props.vpcConfig.subnets}
     });
 
     this.lambda = lambda;
@@ -120,7 +118,7 @@ export class LambdaWebAdapter extends Construct {
         resources: [props.db.tableArn],
       })
     );
-    if (props.vpc) {
+    if (props.vpcConfig.vpc) {
       lambda.role!.addManagedPolicy(
         ManagedPolicy.fromAwsManagedPolicyName(
           "service-role/AWSLambdaVPCAccessExecutionRole"
@@ -186,7 +184,7 @@ export class LambdaWebAdapter extends Construct {
 
     const oac = new CfnOriginAccessControl(this, "oac", {
       originAccessControlConfig: {
-        name: "For lambda function url",
+        name: devConfig.userName,
         originAccessControlOriginType: "lambda",
         signingBehavior: "always",
         signingProtocol: "sigv4",

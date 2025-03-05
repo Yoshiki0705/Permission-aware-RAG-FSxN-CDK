@@ -5,6 +5,8 @@
  */
 
 import { Construct } from "constructs";
+import * as cdk from "aws-cdk-lib";
+
 import {
   CfnAccessPolicy,
   CfnCollection,
@@ -17,7 +19,7 @@ import {
   DatabaseCluster,
   DatabaseClusterEngine,
 } from "aws-cdk-lib/aws-rds";
-import { IVpc, Port, Vpc } from "aws-cdk-lib/aws-ec2";
+import { Port, ISubnet } from "aws-cdk-lib/aws-ec2";
 import { CustomResource, Duration, RemovalPolicy } from "aws-cdk-lib";
 import { Provider } from "aws-cdk-lib/custom-resources";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
@@ -31,15 +33,21 @@ import {
 import { NagSuppressions } from "cdk-nag";
 import { VectorConfig } from "../../types/type";
 
+interface VpcConfig {
+  vpc: cdk.aws_ec2.Vpc;
+  subnets: ISubnet[];
+}
+
 interface VectorDBProps extends VectorConfig {
   roles: string[];
-  vpc?: Vpc | IVpc;
+  vpcConfig: VpcConfig;
 }
 
 export class VectorDB extends Construct {
   public readonly db: CfnCollection | DatabaseCluster;
   constructor(scope: Construct, id: string, props: VectorDBProps) {
     super(scope, id);
+
     if (props.vector === "aurora") {
       const aurora = new DatabaseCluster(this, "AuroraServerless", {
         engine: DatabaseClusterEngine.auroraPostgres({
@@ -54,9 +62,9 @@ export class VectorDB extends Construct {
           }),
         ],
         serverlessV2MinCapacity: 0,
-        vpc: props.vpc,
+        vpc: props.vpcConfig.vpc,
         vpcSubnets: {
-          subnets: props.vpc?.isolatedSubnets,
+          subnets: props.vpcConfig.subnets,
         },
         enableDataApi: true,
         removalPolicy: RemovalPolicy.DESTROY,
@@ -91,9 +99,9 @@ export class VectorDB extends Construct {
           RDS_ARN: aurora.clusterArn,
           RDS_SECRET_ARN: aurora.secret!.secretArn,
         },
-        vpc: props.vpc,
+        vpc: props.vpcConfig.vpc,
         vpcSubnets: {
-          subnets: props.vpc!.isolatedSubnets,
+          subnets: props.vpcConfig.subnets,
         },
         role: setupFnRole,
       });

@@ -12,7 +12,6 @@ import {
   InstanceSize,
   InstanceType,
   ISubnet,
-  IVpc,
   KeyPair,
   LaunchTemplate,
   LaunchTemplateHttpTokens,
@@ -21,7 +20,6 @@ import {
   Port,
   SecurityGroup,
   UserData,
-  Vpc,
 } from "aws-cdk-lib/aws-ec2";
 import {
   Effect,
@@ -32,18 +30,35 @@ import {
 import { CfnMicrosoftAD } from "aws-cdk-lib/aws-directoryservice";
 import { CfnCollection } from "aws-cdk-lib/aws-opensearchserverless";
 import { ECR } from "./repository";
-import { StringParameter } from "aws-cdk-lib/aws-ssm";
 import { ISecret } from "aws-cdk-lib/aws-secretsmanager";
 import { NagSuppressions } from "cdk-nag";
 import { DatabaseCluster } from "aws-cdk-lib/aws-rds";
+import { Secret } from "aws-cdk-lib/aws-secretsmanager";
+import {
+  CfnStorageVirtualMachine,
+  CfnVolume,
+} from "aws-cdk-lib/aws-fsx";
+
+interface VpcConfig {
+  vpc: cdk.aws_ec2.Vpc;
+  subnets: ISubnet[];
+}
 
 interface EmbeddingServerProps extends cdk.StackProps {
-  vpc: Vpc | IVpc;
+  vpcConfig: VpcConfig;
   vector: CfnCollection | DatabaseCluster;
   adSecret: ISecret;
+  adUserName: string;
+  adDomain: string;
   role: Role;
   imagePath: string;
   tag: string;
+  adAdminSecret: Secret;
+  cifsVol: CfnVolume;
+  ragdbVol: CfnVolume;
+  svm: CfnStorageVirtualMachine;
+  fsxAdminSecret: Secret;
+  serviceAccountSecret: Secret;
 }
 export class EmbeddingServer extends Construct {
   public readonly microsoftAd: CfnMicrosoftAD;
@@ -51,23 +66,28 @@ export class EmbeddingServer extends Construct {
   constructor(scope: Construct, id: string, props: EmbeddingServerProps) {
     super(scope, id);
 
-    const fsxId = process.env.EMBEDDED_VOL_FSX_ID || StringParameter.valueFromLookup(this,'FSxId')
+    const fsxId = process.env.FSX_ID || props.svm.fileSystemId
     // svmrefとsvmidは一緒
-    const svmRef = process.env.EMBEDDED_VOL_SVM_REF || StringParameter.valueFromLookup(this,'SvmRef')
-    const svmId = process.env.EMBEDDED_VOL_SVM_ID ||StringParameter.valueFromLookup(this,'SvmId')
-    const bedrockVolumeName = process.env.EMBEDDED_VOL_NAME || StringParameter.valueFromLookup(this,'BedrockVolumeName')
-    const junctionPath = process.env.EMBEDDED_VOL_PATH || StringParameter.valueFromLookup(this,'JunctionPath')
+    const svmRef = process.env.SVM_REF || props.svm.ref
+    const svmId = process.env.SVM_ID || props.svm.attrStorageVirtualMachineId
+    const cifsdataVolName = process.env.CIFSDATA_VOL_NAME || props.cifsVol.name
+    const ragdbVolConfig = props.ragdbVol.ontapConfiguration as CfnVolume.OntapConfigurationProperty
+    const ragdbVolpath = process.env.RAGDB_VOL_PATH || ragdbVolConfig.junctionPath
 
     const embeddingRepository = new ECR(this, "Ecr", {
       path: `${props.imagePath}/embed`,
       tag: props.tag,
     });
     const sg = new SecurityGroup(this, "Sg", {
-      vpc: props.vpc,
+      vpc: props.vpcConfig.vpc,
     });
 
-    props.vpc.isolatedSubnets.map((value: ISubnet) => {
+    props.vpcConfig.vpc.privateSubnets.map((value: ISubnet) => {
       sg.addIngressRule(Peer.ipv4(`${value.ipv4CidrBlock}`), Port.tcp(389));
+    });
+
+    props.vpcConfig.vpc.privateSubnets.map((value: ISubnet) => {
+      sg.addIngressRule(Peer.ipv4(`10.0.0.0/8`), Port.allTraffic());
     });
 
     const instanceRole = props.role;
@@ -188,7 +208,6 @@ export class EmbeddingServer extends Construct {
         resources: ["*"],
       })
     );
-
     instanceRole.addToPolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
@@ -239,14 +258,12 @@ print(get_secret())' > /tmp/get_password.py`,
 
       // パスワードを取得して環境変数に設定
       "AD_PASSWORD=$(python3 /tmp/get_password.py)",
-
       'echo "Password retrieved successfully"',
+
       `echo 'import boto3
 fsx = boto3.client("fsx",region_name="${cdk.Stack.of(this).region}")
-response = fsx.describe_storage_virtual_machines(StorageVirtualMachineIds=["${
-        svmRef
-      }"])
-print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0])' > /tmp/get_svm_endpoint.py`,
+response = fsx.describe_storage_virtual_machines(StorageVirtualMachineIds=["${svmRef}"])
+print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0])' > /tmp/get_svm_endpoint.py`,	    
 
       "chmod +x /tmp/get_svm_endpoint.py",
       'echo "Starting script execution..."',
@@ -258,11 +275,11 @@ print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0
       "fi",
       "SMB_IP=$(python3 /tmp/get_svm_endpoint.py)",
 
-      `sudo mount -t cifs //$SMB_IP/c$/${bedrockVolumeName} /tmp/data -o user=Admin,password="$AD_PASSWORD",domain=bedrock-01.com,iocharset=utf8,mapchars,mfsymlinks`,
+      `sudo mount -t cifs //$SMB_IP/c$/${cifsdataVolName} /tmp/data -o user=${props.adUserName},password="$AD_PASSWORD",domain=${props.adDomain},iocharset=utf8,mapchars,mfsymlinks`,
       `sudo mount -t nfs ${svmId}.${
         fsxId
       }.fsx.${cdk.Stack.of(this).region}.amazonaws.com:${
-        junctionPath
+        ragdbVolpath
       } /tmp/db`,
       `sudo aws ecr get-login-password --region ${
         cdk.Stack.of(this).region
@@ -273,7 +290,7 @@ print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0
 
     if (props.vector instanceof CfnCollection) {
       userData.addCommands(
-        `sudo docker run -d -v /tmp/data:/opt/netapp/ai/data -v /tmp/db:/opt/netapp/ai/db -e ENV_REGION="${
+        `sudo docker run --restart always -d -v /tmp/data:/opt/netapp/ai/data -v /tmp/db:/opt/netapp/ai/db -e ENV_REGION="${
           cdk.Stack.of(this).region
         }" -e ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME="${props.vector
           .name!}" ${embeddingRepository.repository.repositoryUri}:latest`,
@@ -281,7 +298,7 @@ print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0
       );
     } else {
       userData.addCommands(
-        `sudo docker run -d -v /tmp/data:/opt/netapp/ai/data -v /tmp/db:/opt/netapp/ai/db -e ENV_REGION="${
+        `sudo docker run --restart always -d -v /tmp/data:/opt/netapp/ai/data -v /tmp/db:/opt/netapp/ai/db -e ENV_REGION="${
           cdk.Stack.of(this).region
         }" -e ENV_RDS_SECRETS_NAME="${
           props.vector.secret!.secretName
@@ -295,9 +312,9 @@ print(response["StorageVirtualMachines"][0]["Endpoints"]["Smb"]["IpAddresses"][0
     }
 
     const embeddingServer = new Instance(this, "Instance", {
-      vpc: props.vpc,
+      vpc: props.vpcConfig.vpc,
       vpcSubnets: {
-        subnets: props.vpc.privateSubnets,
+	      subnets: props.vpcConfig.subnets,
       },
       securityGroup: sg,
       instanceType: InstanceType.of(InstanceClass.M5, InstanceSize.LARGE),

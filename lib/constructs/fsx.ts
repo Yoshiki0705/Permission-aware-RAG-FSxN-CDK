@@ -12,38 +12,44 @@ import {
   CfnVolume,
 } from "aws-cdk-lib/aws-fsx";
 import { Secret } from "aws-cdk-lib/aws-secretsmanager";
-import { CfnMicrosoftAD } from "aws-cdk-lib/aws-directoryservice";
 import { NagSuppressions } from "cdk-nag";
-import { AdConfig } from "../../types/type";
-import { StringParameter } from "aws-cdk-lib/aws-ssm";
+import { FsxConfig } from "../../types/type";
+import { SecretValue } from 'aws-cdk-lib';
 
-interface FSxNProps extends AdConfig {
+interface FSxNProps extends FsxConfig {
   vpc: Vpc | IVpc;
-  ad: CfnMicrosoftAD;
-  adPassword: Secret;
+  adAdminSecret: Secret;
+  adDnsIps: string[];
 }
+
 export class FSxN extends Construct {
-  public readonly bedrockRagVolume: CfnVolume;
-  public readonly ragdbVolume: CfnVolume;
+  public readonly cifsVol: CfnVolume;
+  public readonly ragdbVol: CfnVolume;
   public readonly svm: CfnStorageVirtualMachine;
-  public readonly fsxPassword: Secret;
+  public readonly fsxAdminSecret: Secret;
+  public readonly serviceAccountSecret: Secret;
   constructor(scope: Construct, id: string, props: FSxNProps) {
     super(scope, id);
 
-    const privateSubnets = props.vpc.privateSubnets.map(
-      (subnet) => subnet.subnetId
-    );
+    let privateSubnets = props.subnetIds.length > 0 
+      ? props.subnetIds
+      : props.vpc.privateSubnets.map((subnet) => subnet.subnetId)
+    if(props.deploymentType === 'SINGLE_AZ_1'){privateSubnets = [privateSubnets[0]]}
 
     const fileSystemSg = new SecurityGroup(this, "SgForFSxN", {
       vpc: props.vpc,
       allowAllOutbound: true,
     });
+
     // https://docs.aws.amazon.com/fsx/latest/ONTAPGuide/limit-access-security-groups.html
     const tcpList = [
       22, 111, 135, 139, 161, 162, 443, 445, 635, 749, 2049, 3260, 4045, 4046,
       10000, 11104, 11105,
     ];
     const udpList = [111, 135, 137, 139, 161, 162, 635, 2049, 4045, 4046, 4049];
+
+  //Add alltrafic testing
+    fileSystemSg.addIngressRule(Peer.ipv4(`0.0.0.0/0`), Port.allTraffic());
 
     fileSystemSg.addIngressRule(
       Peer.ipv4(props.vpc.vpcCidrBlock),
@@ -64,60 +70,85 @@ export class FSxN extends Construct {
       );
     });
 
-    const fsxPassword = new Secret(this, "SecretsForFsx", {
-      generateSecretString: {
-        generateStringKey: "password",
-        passwordLength: 32,
-        requireEachIncludedType: true,
-        secretStringTemplate: JSON.stringify({ username: "fsxadmin" }),
-      },
-    });
+    const fsxAdminSecret = !props.fsxAdminPassword
+      ? new Secret(this, "fsxAdminSecrets", {
+          generateSecretString: {
+            generateStringKey: "password",
+            passwordLength: 32,
+            requireEachIncludedType: true,
+            secretStringTemplate: JSON.stringify({ username: "fsxadmin" }),
+          },
+        })
+      : new Secret(this, "fsxAdminSecrets", {
+        secretObjectValue: {
+          username: SecretValue.unsafePlainText("fsxadmin"),
+          password: SecretValue.unsafePlainText(props.fsxAdminPassword),
+        },
+      })
 
-    this.fsxPassword = fsxPassword;
+    this.fsxAdminSecret = fsxAdminSecret;
 
     const fileSystem = new CfnFileSystem(this, "FileSystem", {
       fileSystemType: "ONTAP",
-      subnetIds: [privateSubnets[0]],
-      storageCapacity: 1024,
+      subnetIds: privateSubnets,
+      storageCapacity: props.storageCapacity,
       securityGroupIds: [fileSystemSg.securityGroupId],
       ontapConfiguration: {
-        deploymentType: "SINGLE_AZ_1",
-        throughputCapacity: 128,
+        deploymentType: props.deploymentType,
+        throughputCapacity: props.throughputCapacity,
         fsxAdminPassword: new cdk.CfnDynamicReference(
           cdk.CfnDynamicReferenceService.SECRETS_MANAGER,
-          `${fsxPassword.secretArn}:SecretString:password`
+          `${this.fsxAdminSecret.secretArn}:SecretString:password`
         ).toString(),
         preferredSubnetId: privateSubnets[0],
       },
     });
-    
+
+    // Service Accountのパスワード設定が空の場合は、AdAdminのパスワードを設定
+    const serviceAccountSecret = !props.adConfig.serviceAccountPassword
+      ? new Secret(this, "serviceAccountSecret", {
+        secretObjectValue: {
+          username: SecretValue.unsafePlainText(props.adConfig.serviceAccountUserName),
+          password: SecretValue.unsafePlainText(new cdk.CfnDynamicReference(
+            cdk.CfnDynamicReferenceService.SECRETS_MANAGER,
+            `${props.adAdminSecret.secretArn}:SecretString:password`).toString()
+          ),
+        },
+      })
+      : new Secret(this, "serviceAccountSecret", {
+        secretObjectValue: {
+          username: SecretValue.unsafePlainText(props.adConfig.serviceAccountUserName),
+          password: SecretValue.unsafePlainText(props.adConfig.serviceAccountPassword),
+        },
+      })
+    this.serviceAccountSecret = serviceAccountSecret
     
     const svm = new CfnStorageVirtualMachine(this, "SVM", {
       fileSystemId: fileSystem.ref,
-      name: "brsvm",
+      name: props.adConfig.svmNetBiosName,
       svmAdminPassword: new cdk.CfnDynamicReference(
         cdk.CfnDynamicReferenceService.SECRETS_MANAGER,
-        `${fsxPassword.secretArn}:SecretString:password`
+        `${this.fsxAdminSecret.secretArn}:SecretString:password`
       ).toString(),
       activeDirectoryConfiguration: {
-        netBiosName: "BRSVM",
+        netBiosName: props.adConfig.svmNetBiosName,
         selfManagedActiveDirectoryConfiguration: {
-          dnsIps: props.ad.attrDnsIpAddresses,
-          domainName: props.domainName,
-          userName: "Admin",
+          dnsIps: props.adDnsIps,
+          domainName: props.adConfig.adDomainName,
+          userName: props.adConfig.serviceAccountUserName,
           password: new cdk.CfnDynamicReference(
             cdk.CfnDynamicReferenceService.SECRETS_MANAGER,
-            `${props.adPassword.secretArn}:SecretString:password`
+            `${serviceAccountSecret.secretArn}:SecretString:password`
           ).toString(),
-          fileSystemAdministratorsGroup: "AWS Delegated Administrators",
-          organizationalUnitDistinguishedName: props.ou,
+          organizationalUnitDistinguishedName: props.adConfig.adOu,
+          fileSystemAdministratorsGroup: props.adConfig.fileSystemAdministratorsGroup
         },
       },
     });
 
     this.svm = svm;
 
-    this.bedrockRagVolume = new CfnVolume(this, "BedrockRag", {
+    this.cifsVol = new CfnVolume(this, "BedrockRag", {
       name: "bedrockrag",
       ontapConfiguration: {
         storageVirtualMachineId: svm.ref,
@@ -129,7 +160,7 @@ export class FSxN extends Construct {
       volumeType: "ONTAP",
     });
 
-    this.ragdbVolume = new CfnVolume(this, "RagDB", {
+    this.ragdbVol = new CfnVolume(this, "RagDB", {
       name: "ragdb",
       ontapConfiguration: {
         storageVirtualMachineId: svm.ref,
@@ -142,7 +173,7 @@ export class FSxN extends Construct {
     });
 
     NagSuppressions.addResourceSuppressions(
-      [fileSystemSg, fsxPassword],
+      [fileSystemSg, fsxAdminSecret,serviceAccountSecret],
       [
         {
           id: "AwsSolutions-SMG4",
@@ -159,30 +190,5 @@ export class FSxN extends Construct {
       ],
       true
     );
-    const ontapConfigProperty = this.ragdbVolume
-      .ontapConfiguration as CfnVolume.OntapConfigurationProperty;
-      
-    new StringParameter(this, 'FSxId', {
-      parameterName:'FSxId',
-      stringValue: svm.fileSystemId
-    })
-    new StringParameter(this, 'SvmRef', {
-      parameterName:'SvmRef',
-      stringValue: svm.ref
-    })
-    new StringParameter(this, 'SvmId', {
-      parameterName:'SvmId',
-      stringValue: svm.attrStorageVirtualMachineId
-    })
-    new StringParameter(this, 'BedrockVolumeName', {
-      parameterName:'BedrockVolumeName',
-      stringValue: this.bedrockRagVolume.name
-    })
-    if (ontapConfigProperty.junctionPath) {
-      new StringParameter(this, 'JunctionPath', {
-        parameterName:'JunctionPath',
-        stringValue: ontapConfigProperty.junctionPath
-      })
-    }
   }
 }

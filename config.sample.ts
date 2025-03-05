@@ -12,25 +12,38 @@ import { CpuArchitecture, OperatingSystemFamily } from "aws-cdk-lib/aws-ecs";
 
 export const devConfig: Config = {
   userName: "user01",
-  adminEmail: "user01@example.com",
+  adminEmail: "user01@netappdemo.be",
   stackName: "Prototype",
-  allowedIps: ["198.51.100.0/24", "192.0.2.0/24 "],
+  allowedIps: ["202.3.127.4/32"],
   networkConfig: {
-    existingVpc: false,
-    vpcId: "",
+    existingVpc: true,
+    vpcId: "vpc-08869490ebfad92e8",
     cidr: "10.0.0.0/16",
     cidrMask: 24,
     publicSubnet: true,
     natSubnet: true,
     isolatedSubnet: true,
     maxAzs: 2,
-    appDomainName: "fsxn.hiroshima-u.ac.jp",
-    existingRoute53: false,
+    appDomainName: "fsxn.netappdemo.be", // 現状未使用？
+    existingRoute53: true, // 現状未使用？
   },
-  adConfig: {
-    adUsername: "Admin",
-    ou: "OU=Computers,OU=bedrock-01,DC=bedrock-01,DC=com",
-    domainName: "bedrock-01.com",
+  fsxConfig: {
+    subnetIds: [], //空の場合はnetworkConfigで指定されたNetworkのPrivate Subnet上に構築
+    storageCapacity: 1024,
+    deploymentType: "SINGLE_AZ_1", // SINGLE_AZ_1 or MULTI_AZ_1
+    throughputCapacity: 128,
+    fsxAdminPassword:"Netapp1!", // 空の場合は自動生成して、Secret Managerに格納
+    adConfig:{
+      existingAd: true,
+      svmNetBiosName: "svm",
+      adDnsIps: ["10.0.3.103","10.0.2.207"], // existingAd flaseの場合は、ManagedADを構築して、StringParameterに格納
+      adDomainName: "netappdemo.be",
+      adAdminPassword: "Netapp1!", // 空の場合は自動生成して、Secret Managerに格納
+      serviceAccountUserName: "Admin", // Embedding Serverのマウント用ユーザー名もこちらから引っ張ってます
+      serviceAccountPassword: "", // 空の場合はSecret ManagerのadAdminPasswordの値を利用
+      adOu: "OU=Computers,OU=netappdemo,DC=netappdemo,DC=be",
+      fileSystemAdministratorsGroup: "AWS Delegated Administrators", //委任されたファイルシステム管理者グループ。ファイルシステムを管理できるAD内のグループの名前。デフォルトでは、これは「Domain admins」です。
+    }
   },
   databaseConfig: {
     partitionKey: {
@@ -43,7 +56,9 @@ export const devConfig: Config = {
   chatAppConfig: {
     imagePath: path.join(__dirname, "./", "docker"),
     tag: "latest",
-    albFargateServiceProps: {
+    lambdaVpcId:"vpc-0c76d3db311ac8b61",
+    lambdaVpcSubnets:[{subnetId: "subnet-0b0ac9e942020b672",availabilityZone:"use1-az5"},{subnetId: "subnet-085b22a05300efd63",availabilityZone:"use1-az3"}], //subnetIdsとvpcId両方指定が必要。Lambdaの制限でPublicSubnetはエラー。（allowPublicSubnetをつければ回避は可能）Aurora/Embedding Serverも同一サブネット指定となるが、Aurora Cluster側の制限でSubnetは2つ以上必要。
+    albFargateServiceProps: { //以下は現在未使用
       cpu: 1024,
       memoryLimitMiB: 2048,
       desiredCount: 1,

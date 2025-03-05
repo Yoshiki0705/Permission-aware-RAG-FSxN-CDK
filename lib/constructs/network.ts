@@ -19,7 +19,6 @@ import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
 import { isEmpty } from "lodash";
 import { NetworkConfig } from "../../types/type";
-import { StringParameter } from "aws-cdk-lib/aws-ssm";
 
 export class Network extends Construct {
   public readonly vpc: Vpc | IVpc;
@@ -90,9 +89,5 @@ export class Network extends Construct {
         service: InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
       });
     }
-    new StringParameter(this, 'VpcId', {
-      parameterName:'VpcId',
-      stringValue: this.vpc.vpcId
-    })
   }
 }

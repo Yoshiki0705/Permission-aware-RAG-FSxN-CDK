@@ -116,20 +116,14 @@ export async function batchDelete(ids: string[], region: string) {
   }
 }
 
-export async function addIndexDocument(
-  data: {
-    vector_field: number[];
-    text: string;
-    metadata: ExtendedMetadata;
-  },
-  embeddings: BedrockEmbeddings,
+export async function initPgVectorClient(
   region: string,
-  uuid: string
-) {
+  embeddings: BedrockEmbeddings,
+){
   const secretValue = await getSecretValue(region, process.env.ENV_SECRETS_ARN);
-
   const secrets: DBSecrets = JSON.parse(secretValue as string);
-  const hnswConfig = {
+
+  const config = {
     postgresConnectionOptions: {
       type: "postgres",
       host: secrets.host,
@@ -148,14 +142,25 @@ export async function addIndexDocument(
     // supported distance strategies: cosine (default), innerProduct, or euclidean
     distanceStrategy: "cosine" as DistanceStrategy,
   };
-
-  const hnswPgVectorStore = await PGVectorStore.initialize(
+  const vectorStore = await PGVectorStore.initialize(
     embeddings,
-    hnswConfig
+    config
   );
 
+  return vectorStore
+}
+
+export async function addIndexDocument(
+  data: {
+    vector_field: number[];
+    text: string;
+    metadata: ExtendedMetadata;
+  },
+  vectorStore: PGVectorStore,
+  uuid: string
+) {
   console.log(uuid);
-  await hnswPgVectorStore.addDocuments(
+  await vectorStore.addDocuments(
     [{ pageContent: data.text, metadata: data.metadata }],
     { ids: [uuid] }
   );

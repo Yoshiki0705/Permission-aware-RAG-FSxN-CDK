@@ -137,6 +137,7 @@ class CreatePoolUser extends Construct {
       resources: [props.userPool.userPoolArn],
     });
 
+    // TempパスはNetapp1!を利用
     new AwsCustomResource(this, `CreateUser-${id}`, {
       onCreate: {
         service: "CognitoIdentityServiceProvider",
@@ -144,6 +145,7 @@ class CreatePoolUser extends Construct {
         parameters: {
           UserPoolId: props.userPool.userPoolId,
           Username: props.username,
+          TemporaryPassword: "Netapp1!",
           UserAttributes: [
             {
               Name: "email",

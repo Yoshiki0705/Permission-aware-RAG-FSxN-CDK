@@ -12,7 +12,7 @@ import { useAuthStore } from "@/store/useAuthStore";
 const INIT_MESSAGE = {
   role: "assistant",
   content:
-    "Hi! I'm Claude on Bedrock. I can help you with queries on your FSxN data.\nWhat would you like to know?",
+    "Hi! I'm RAG Chatbot. I can help you with queries on your FSxN data.\nWhat would you like to know?",
   documents: [],
 };
 
