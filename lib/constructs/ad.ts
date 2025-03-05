@@ -198,5 +198,10 @@ export class Ad extends Construct {
     new cdk.CfnOutput(this, "GetSecretValueCommand", {
       value: `aws secretsmanager get-secret-value --secret-id ${this.adPasswoed.secretName} --query SecretString --output text --profile YOUR_AWS_PROFILE | jq -r '.password' `,
     });
+
+    new cdk.CfnOutput(this, 'AdPasswdArnOutput', {
+      value: this.adPasswoed.secretArn,
+      exportName: 'AdPasswdArn',
+    });
   }
 }
