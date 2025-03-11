@@ -47,6 +47,17 @@ async function main() {
 
   const { SCANNER_INTERVAL } = process.env;
 
+  // use aurora serverless client
+  const bedrockEmbeddings = new BedrockEmbeddings({
+    region: "us-east-1",
+    model: process.env.BEDROCK_EMBEDDING_MODEL_ID,
+    credentials: fromInstanceMetadata({
+      maxRetries: 4,
+      timeout: 2000,
+    }),
+  });
+
+
   if (process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME) {
     process.env.OPEN_SEARCH_SERVERLESS_COLLECTION_NAME =
       process.env.ENV_OPEN_SEARCH_SERVERLESS_COLLECTION_NAME;
@@ -97,7 +108,7 @@ async function main() {
     }
 
     // process immediately after start
-    await processFiles(client, REGION, indexName);
+    await processFiles(client, REGION, indexName,null,bedrockEmbeddings);
 
     // prevent overlapping scan cycles
     let isActive = false;
@@ -109,22 +120,13 @@ async function main() {
       }
 
       isActive = true;
-      await processFiles(client, REGION, indexName), ms(SCANNER_INTERVAL);
+      await processFiles(client, REGION, indexName,null,bedrockEmbeddings), ms(SCANNER_INTERVAL);
       isActive = false;
     }, ms(SCANNER_INTERVAL));
   } else {
     // Validate provided configuration
     //
     const { REGION } = process.env;
-    // use aurora serverless client
-    const bedrockEmbeddings = new BedrockEmbeddings({
-      region: "us-east-1",
-      model: process.env.BEDROCK_EMBEDDING_MODEL_ID,
-      credentials: fromInstanceMetadata({
-        maxRetries: 4,
-        timeout: 2000,
-      }),
-    });
     const pgVectorStoreClient = await initPgVectorClient(
       process.env.REGION, bedrockEmbeddings
     )
@@ -132,7 +134,7 @@ async function main() {
     await validate();
     let client: Client;
     // process immediately after start
-    await processFiles(client, REGION);
+    await processFiles(client, REGION,null,pgVectorStoreClient,bedrockEmbeddings);
 
     // prevent overlapping scan cycles
     let isActive = false;
